@@ -230,7 +230,17 @@ def _make_retrieve(retriever: HybridRetriever, analyzer_chain):
         def _extract_filters(q: str) -> dict[str, Any] | None:
             try:
                 res = analyzer_chain.invoke({"question": q})
-                filters = {k: v for k, v in res.items() if v is not None}
+                filters = {}
+                
+                company_name = res.get("company_name")
+                doc_type = res.get("type")
+                
+                if company_name:
+                    filters["$or"] = [{"company_name": company_name}, {"company_name": {"$exists": False}}]
+                
+                if doc_type:
+                    filters["type"] = doc_type
+                    
                 return filters if filters else None
             except Exception:
                 return None
@@ -578,11 +588,26 @@ def surf_and_ingest_node(state: AgentState) -> AgentState:
     # Truncate just to be completely safe against Tavily 400 char limit
     search_query = original_query[:350]
     session_id = state.get("session_id", "finsight")
+    # Extract company name using the analyzer chain so we can tag the docs
+    from finsight.rag.chains import build_query_analyzer_chain
+    from langchain_groq import ChatGroq
+    from config.settings import settings
     
-    logger.info("Executing surf_and_ingest node for: %s", search_query)
+    # We create a lightweight analyzer here to keep it simple, or we could pass it in.
+    llm = ChatGroq(model=settings.groq_routing_model, api_key=settings.groq_api_key)
+    analyzer = build_query_analyzer_chain(llm)
+    try:
+        analysis = analyzer.invoke({"question": search_query})
+        company_name = analysis.get("company_name")
+    except Exception:
+        company_name = None
+        
+    extra_metadata = {"company_name": company_name} if company_name else {}
+
+    logger.info("Executing surf_and_ingest node for: %s (Company: %s)", search_query, company_name)
     
     # This downloads, chunks, and puts the results into Pinecone
-    ingested_docs = surf_and_ingest(search_query, namespace=session_id)
+    ingested_docs = surf_and_ingest(search_query, namespace=session_id, extra_metadata=extra_metadata)
     logger.info("Successfully ingested %d chunks to Pinecone.", len(ingested_docs))
     
     # We do NOT pass the ingested docs directly to generate!

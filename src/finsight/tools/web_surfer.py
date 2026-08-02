@@ -14,8 +14,9 @@ from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)
 
-def surf_and_ingest(query: str, namespace: str = "finsight") -> list[Document]:
+def surf_and_ingest(query: str, namespace: str = "finsight", extra_metadata: dict = None) -> list[Document]:
     """Search the web for a query, download relevant PDFs or docs, parse with LlamaParse, and ingest to Pinecone."""
+    extra_metadata = extra_metadata or {}
     if not settings.tavily_api_key or not settings.llama_parse_api_key:
         logger.error("Missing API keys for Tavily or LlamaParse.")
         return []
@@ -61,6 +62,7 @@ def surf_and_ingest(query: str, namespace: str = "finsight") -> list[Document]:
                     if parsed_docs:
                         markdown_text = "\n".join([d.text for d in parsed_docs])
                         metadata = {"source": url, "title": title, "type": "pdf_web"}
+                        metadata.update(extra_metadata)
                         chunks = chunk_document(markdown_text, metadata=metadata)
                         
                         logger.info(f"Ingesting {len(chunks)} chunks from {title}...")
@@ -74,6 +76,7 @@ def surf_and_ingest(query: str, namespace: str = "finsight") -> list[Document]:
                 # Raw text ingestion
                 logger.info("Ingesting raw web text...")
                 metadata = {"source": url, "title": title, "type": "html_web"}
+                metadata.update(extra_metadata)
                 chunks = chunk_document(content, metadata=metadata)
                 if chunks:
                     vector_store.add_documents(chunks)

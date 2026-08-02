@@ -294,17 +294,19 @@ def build_planner_chain(llm: BaseChatModel) -> RunnableSerializable[dict[str, An
 QUERY_ANALYZER_SYSTEM_PROMPT = """\
 You are an expert financial query analyzer. Your job is to extract metadata filters from a user's question to optimize database retrieval.
 
-Extract three optional fields:
-1. "ticker": The stock ticker symbol (e.g., AAPL, TSLA, GOOGL, MSFT) if mentioned. If a company name is used instead, output its standard ticker.
-2. "fiscal_year": The 4-digit year (e.g., "2024", "2023") if mentioned.
-3. "type": If the user is specifically asking about an uploaded document (e.g. "my resume", "the uploaded file", "this document"), output exactly "user_upload".
+Extract four optional fields:
+1. "company_name": The full name of the company mentioned (e.g., "Apple", "Tesla", "Telus").
+2. "ticker": The stock ticker symbol (e.g., AAPL, TSLA) if mentioned or known.
+3. "fiscal_year": The 4-digit year (e.g., "2024", "2023") if mentioned.
+4. "type": If the user is specifically asking about an uploaded document (e.g. "my resume", "the uploaded file", "this document"), output exactly "user_upload".
 
 If a field is not mentioned, return null for that field.
-Respond with a JSON object containing exactly three fields: "ticker", "fiscal_year", and "type".
+Respond with a JSON object containing exactly four fields: "company_name", "ticker", "fiscal_year", and "type".
 
 Example input: "What is this guy's specialty from his resume?"
 Example output:
 {
+  "company_name": null,
   "ticker": null,
   "fiscal_year": null,
   "type": "user_upload"
