@@ -141,14 +141,13 @@ async def list_sessions():
     try:
         conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
         cursor = conn.cursor()
-        # Query distinct threads
-        cursor.execute("SELECT DISTINCT thread_id FROM checkpoints")
+        # Query distinct threads, ordering by the latest rowid (newest first)
+        cursor.execute("SELECT thread_id, MAX(rowid) as max_rowid FROM checkpoints GROUP BY thread_id ORDER BY max_rowid DESC")
         threads = cursor.fetchall()
         
         sessions = []
-        for (thread_id,) in threads:
-            # We don't have exact timestamps easily without parsing the checkpoint_id
-            # We'll just return the thread_id
+        for row in threads:
+            thread_id = row[0]
             sessions.append(SessionInfo(thread_id=thread_id, last_updated="Unknown", message_count=0))
             
         return sessions
