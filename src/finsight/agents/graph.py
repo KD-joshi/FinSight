@@ -602,7 +602,7 @@ def surf_and_ingest_node(state: AgentState) -> AgentState:
     from config.settings import settings
     
     # We create a lightweight analyzer here to keep it simple, or we could pass it in.
-    llm = ChatGroq(model=settings.groq_routing_model, api_key=settings.groq_api_key)
+    llm = ChatGroq(model=settings.groq_fallback_model, api_key=settings.groq_api_key)
     analyzer = build_query_analyzer_chain(llm)
     try:
         analysis = analyzer.invoke({"question": search_query})
