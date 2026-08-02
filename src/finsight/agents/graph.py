@@ -595,9 +595,18 @@ def _should_surf_or_end(state: AgentState) -> Literal["surf_and_ingest_node", "E
 
 def _should_end_or_search(state: AgentState) -> Literal["ask_human_consent", "END"]:
     """Self-RAG check: if the LLM explicitly states it lacks information, force a web search."""
-    generation = state.get("generation", "")
-    # The LLM is prompted to explicitly output this substring if it lacks information
-    if "I don't have enough information" in generation or "I do not have enough information" in generation:
+    generation = state.get("generation", "").lower()
+    
+    # The LLM is prompted to explicitly output this substring if it lacks information.
+    # Handle smart quotes, straight quotes, and slight variations.
+    lacks_info = (
+        "don't have enough information" in generation or 
+        "don’t have enough information" in generation or 
+        "do not have enough information" in generation or
+        "not have enough information" in generation
+    )
+    
+    if lacks_info:
         # Check if we've already tried web searching and maxed out our budget
         retry_count = state.get("retry_count", 0)
         max_retries = state.get("max_retries", 3)
