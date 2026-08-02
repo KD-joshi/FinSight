@@ -185,7 +185,7 @@ Classify the user's question into one of two categories:
 - Questions involving calculations from multiple data points
 
 **out_of_domain** — The question is completely unrelated to finance, corporate strategy, investing, or the documents the user explicitly uploaded:
-- Small talk or general knowledge ("What is the capital of France?", "Write a poem")
+- Greetings and small talk ("hi", "hello", "how are you?", "What is the capital of France?", "Write a poem")
 - Off-topic advice ("How do I bake a cake?")
 - Note: DO NOT classify as out_of_domain if the user is asking about an uploaded document (e.g. "what is the highlight of this resume?").
 
@@ -364,6 +364,37 @@ def build_condense_question_chain(llm: BaseChatModel) -> RunnableSerializable[di
 
 
 # ======================================================================
+# 8. CONVERSATIONAL CHAIN (OUT OF DOMAIN)
+# ======================================================================
+
+CONVERSATIONAL_SYSTEM_PROMPT = """\
+You are FinSight, a polite, helpful, and highly intelligent AI Financial Analyst. 
+Your primary purpose is to help users analyze corporate strategy, SEC filings (10-K, 10-Q), 
+risk factors, and financial performance for top companies, or to answer questions about 
+documents the user explicitly uploads.
+
+The user has just said something that is either a greeting (e.g., "hi", "hello") or something 
+completely unrelated to your financial/document-analysis purpose (e.g., "tell me a poem").
+
+If it's a greeting:
+Respond warmly, introduce yourself as FinSight, and briefly explain what you can do. 
+
+If it's an off-topic question:
+Politely decline to answer the specific question, remind the user of your purpose as an 
+AI Financial Analyst, and provide a couple of examples of the types of questions you CAN answer.
+
+Keep your response concise, friendly, and helpful."""
+
+def build_conversational_chain(llm: BaseChatModel) -> RunnableSerializable[dict[str, Any], str]:
+    """Build the conversational chain for handling greetings and off-topic queries."""
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", CONVERSATIONAL_SYSTEM_PROMPT),
+        ("human", "{question}"),
+    ])
+    chain = prompt | llm | StrOutputParser()
+    return chain
+
+# ======================================================================
 # Convenience: Build all chains at once
 # ======================================================================
 
@@ -383,6 +414,7 @@ def build_all_chains(
         "planner": build_planner_chain(small_llm),
         "analyzer": build_query_analyzer_chain(small_llm),
         "condenser": build_condense_question_chain(small_llm),
+        "conversational": build_conversational_chain(small_llm),
     }
     logger.info("Built %d RAG chains: %s", len(chains), list(chains.keys()))
     return chains

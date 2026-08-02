@@ -58,6 +58,7 @@ from finsight.rag.chains import (
     build_router_chain,
     build_query_analyzer_chain,
     build_condense_question_chain,
+    build_conversational_chain,
 )
 from finsight.rag.retriever import HybridRetriever
 from finsight.utils.query_cache import query_cache
@@ -117,7 +118,7 @@ class AgentState(TypedDict, total=False):
 # Node Functions
 # ======================================================================
 
-def _make_route_query(router_chain):
+def _make_route_query(router_chain, conversational_chain=None):
     """Create the route_query node function.
 
     Classifies the query as simple or complex using the router chain.
@@ -154,7 +155,14 @@ def _make_route_query(router_chain):
             route = "simple"
 
         if route == "out_of_domain":
-            err_msg = "I am an AI Financial Analyst. I can help with corporate strategy, SEC filings, and financial performance. Or, you can ask me about documents you have explicitly uploaded."
+            if conversational_chain:
+                try:
+                    err_msg = conversational_chain.invoke({"question": question})
+                except Exception:
+                    err_msg = "I am FinSight, an AI Financial Analyst. I can help with corporate strategy, SEC filings, and financial performance."
+            else:
+                err_msg = "I am an AI Financial Analyst. I can help with corporate strategy, SEC filings, and financial performance. Or, you can ask me about documents you have explicitly uploaded."
+                
             return {
                 "route": route,
                 "current_query": question,
@@ -739,9 +747,10 @@ def build_rag_agent(
     generator_chain = build_generator_chain(llm)
     analyzer_chain = build_query_analyzer_chain(routing_llm)
     condenser_chain = build_condense_question_chain(routing_llm)
+    conversational_chain = build_conversational_chain(routing_llm)
 
     # Create node functions (closures over chains + retriever)
-    route_query = _make_route_query(router_chain)
+    route_query = _make_route_query(router_chain, conversational_chain)
     plan_query = _make_plan_query(planner_chain)
     retrieve = _make_retrieve(retriever, analyzer_chain)
     rerank_documents = _make_rerank_documents()
