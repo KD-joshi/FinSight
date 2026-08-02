@@ -390,7 +390,11 @@ def _make_rewrite_query(rewriter_chain):
                 "failed_context": failed_context,
             })
             rewritten = rewritten.strip()
-            logger.info("Rewritten query: %.120s", rewritten)
+            if not rewritten:
+                rewritten = current_query
+                logger.warning("Rewriter returned empty string, falling back to original query.")
+            else:
+                logger.info("Rewritten query: %.120s", rewritten)
         except Exception:
             logger.exception("Rewriter chain failed — using original query.")
             rewritten = current_query
