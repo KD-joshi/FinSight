@@ -172,6 +172,7 @@ def _make_route_query(router_chain):
             "all_documents": [],
             "documents": [],
             "generation": "",
+            "web_search_attempted": False,
         }
 
     return route_query
