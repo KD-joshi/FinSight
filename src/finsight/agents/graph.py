@@ -110,6 +110,7 @@ class AgentState(TypedDict, total=False):
     error: str
     active_filters: dict[str, Any]
     human_consent: bool
+    web_search_attempted: bool
 
 
 # ======================================================================
@@ -531,6 +532,9 @@ def _should_generate_or_rewrite(state: AgentState) -> Literal["generate", "rewri
         return "generate"
 
     if retry_count >= max_retries:
+        if state.get("web_search_attempted"):
+            logger.warning("Already attempted web search. Giving up and generating partial answer.")
+            return "generate"
         logger.warning(
             "No relevant docs after %d retries → asking human consent to web search.",
             retry_count,
@@ -587,11 +591,12 @@ def surf_and_ingest_node(state: AgentState) -> AgentState:
         "documents": [],
         "retry_count": 0,
         "current_query": search_query, # Use this for retrieval
+        "web_search_attempted": True,
     }
 
 
 def _should_surf_or_end(state: AgentState) -> Literal["surf_and_ingest_node", "END"]:
-    if state.get("human_consent"):
+    if state.get("route") == "surf":
         logger.info("Human consent granted → initiating web search.")
         return "surf_and_ingest_node"
     logger.info("Human consent denied → terminating pipeline.")
@@ -611,6 +616,10 @@ def _should_end_or_search(state: AgentState) -> Literal["ask_human_consent", "EN
     )
     
     if lacks_info:
+        if state.get("web_search_attempted"):
+            logger.warning("LLM still lacks information after web search. Terminating.")
+            return "END"
+            
         # Check if we've already tried web searching and maxed out our budget
         retry_count = state.get("retry_count", 0)
         max_retries = state.get("max_retries", 3)
