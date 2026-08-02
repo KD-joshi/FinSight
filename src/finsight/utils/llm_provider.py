@@ -37,50 +37,46 @@ _BACKOFF_MULTIPLIER: float = 2.0
 # Factory helpers
 # ======================================================================
 
-def get_llm(
-    *,
-    model: Optional[str] = None,
-    temperature: Optional[float] = None,
-    max_tokens: Optional[int] = None,
-) -> ChatGroq:
-    """Return the primary LLM (Groq)."""
-    if not settings.has_groq_key():
-        raise ValueError("GROQ_API_KEY is not configured.")
+def get_llm(**kwargs) -> BaseChatModel:
+    """Return the primary Groq language model."""
+    model = settings.groq_model
+    temperature = kwargs.pop("temperature", None)
+    max_tokens = kwargs.pop("max_tokens", None)
     return ChatGroq(
-        model=model or settings.groq_model,
+        model=model,
         api_key=settings.groq_api_key,
         temperature=temperature if temperature is not None else settings.llm_temperature,
         max_tokens=max_tokens or settings.llm_max_tokens,
+        max_retries=settings.llm_max_retries,
+        **kwargs
     )
 
-def get_fallback_llm(
-    *,
-    model: Optional[str] = None,
-    temperature: Optional[float] = None,
-    max_tokens: Optional[int] = None,
-) -> ChatGoogleGenerativeAI:
-    """Return the first fallback LLM (Google Gemini)."""
-    if not settings.has_google_key():
-        raise ValueError("GOOGLE_API_KEY is not configured.")
+def get_fallback_llm(**kwargs) -> BaseChatModel:
+    """Return the Gemini fallback model."""
+    if not settings.google_api_key:
+        raise ValueError("Google API key not configured")
+    model = kwargs.pop("model", None)
+    temperature = kwargs.pop("temperature", None)
+    max_tokens = kwargs.pop("max_tokens", None)
     return ChatGoogleGenerativeAI(
         model=model or settings.gemini_model,
         google_api_key=settings.google_api_key,
-        temperature=temperature if temperature is not None else settings.llm_temperature,
         max_output_tokens=max_tokens or settings.llm_max_tokens,
+        thinking_level="medium",
+        **kwargs
     )
 
-def get_cohere_llm(
-    *,
-    model: Optional[str] = None,
-    temperature: Optional[float] = None,
-) -> ChatCohere:
-    """Return the second fallback LLM (Cohere)."""
-    if not settings.has_cohere_key():
-        raise ValueError("COHERE_API_KEY is not configured.")
+def get_cohere_llm(**kwargs) -> BaseChatModel:
+    """Return the Cohere fallback model."""
+    if not settings.cohere_api_key:
+        raise ValueError("Cohere API key not configured")
+    model = kwargs.pop("model", None)
+    temperature = kwargs.pop("temperature", None)
     return ChatCohere(
         model=model or "command-r-plus",
         cohere_api_key=settings.cohere_api_key,
         temperature=temperature if temperature is not None else settings.llm_temperature,
+        **kwargs
     )
 
 
@@ -166,15 +162,15 @@ def invoke_with_fallback(
 # Convenience: chain-compatible wrapper
 # ======================================================================
 
-def get_llm_with_fallback() -> BaseChatModel:
+def get_llm_with_fallback(**kwargs) -> BaseChatModel:
     """Return a primary LLM that has a ``.with_fallbacks()`` chain."""
-    primary = get_llm()
+    primary = get_llm(**kwargs)
     fallbacks = []
     try:
-        fallbacks.append(get_fallback_llm())
+        fallbacks.append(get_fallback_llm(**kwargs))
     except ValueError: pass
     try:
-        fallbacks.append(get_cohere_llm())
+        fallbacks.append(get_cohere_llm(**kwargs))
     except ValueError: pass
 
     if fallbacks:

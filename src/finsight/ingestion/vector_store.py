@@ -19,26 +19,24 @@ logger = logging.getLogger(__name__)
 
 # Batch size for upsert operations
 _UPSERT_BATCH_SIZE: int = 64
-_DEFAULT_NAMESPACE: str = "finsight"
-_vector_store_cache: Optional[PineconeVectorStore] = None
 
 # ======================================================================
 # LangChain Vector Store wrapper
 # ======================================================================
 
-def get_vector_store() -> PineconeVectorStore:
-    """Return a LangChain PineconeVectorStore.
+def get_vector_store(namespace: str) -> PineconeVectorStore:
+    """Return a LangChain PineconeVectorStore configured for a specific namespace.
+
+    Parameters
+    ----------
+    namespace:
+        The Pinecone namespace (usually the session/thread ID).
 
     Returns
     -------
     PineconeVectorStore
         A LangChain-compatible vector store.
     """
-    global _vector_store_cache
-
-    if _vector_store_cache is not None:
-        return _vector_store_cache
-
     if not settings.has_pinecone_config():
         raise ValueError(
             "Pinecone Cloud is not configured. "
@@ -48,16 +46,15 @@ def get_vector_store() -> PineconeVectorStore:
     embeddings = get_embeddings()
     index_name = settings.pinecone_index_name
 
-    logger.info("Initializing PineconeVectorStore for index: '%s', namespace: '%s'", index_name, _DEFAULT_NAMESPACE)
+    logger.debug("Initializing PineconeVectorStore for index: '%s', namespace: '%s'", index_name, namespace)
 
     store = PineconeVectorStore(
         index_name=index_name,
         embedding=embeddings,
-        namespace=_DEFAULT_NAMESPACE,
+        namespace=namespace,
         pinecone_api_key=settings.pinecone_api_key
     )
 
-    _vector_store_cache = store
     return store
 
 
@@ -67,6 +64,7 @@ def get_vector_store() -> PineconeVectorStore:
 
 def ingest_documents(
     documents: list[Document],
+    namespace: str,
     *,
     batch_size: int = _UPSERT_BATCH_SIZE,
 ) -> int:
@@ -88,12 +86,12 @@ def ingest_documents(
         logger.warning("ingest_documents called with empty list — skipping.")
         return 0
 
-    store = get_vector_store()
+    store = get_vector_store(namespace)
 
     logger.info(
         "Ingesting %d document(s) into Pinecone namespace '%s' (batch_size=%d)…",
         len(documents),
-        _DEFAULT_NAMESPACE,
+        namespace,
         batch_size,
     )
 
@@ -134,6 +132,7 @@ def ingest_documents(
 
 def similarity_search(
     query: str,
+    namespace: str,
     *,
     k: int = 0,
     filter_metadata: Optional[dict[str, Any]] = None,
@@ -156,10 +155,11 @@ def similarity_search(
         Top-*k* similar documents with scores in metadata.
     """
     k = k or settings.retrieval_top_k
-    store = get_vector_store()
+    store = get_vector_store(namespace)
 
     logger.info(
-        "Similarity search (Pinecone): query=%.80s…, k=%d, filter=%s",
+        "Similarity search (Pinecone %s): query=%.80s…, k=%d, filter=%s",
+        namespace,
         query,
         k,
         filter_metadata,

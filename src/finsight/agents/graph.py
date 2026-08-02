@@ -1,40 +1,44 @@
 """LangGraph-based Agentic RAG pipeline for financial document analysis.
 
-Implements Corrective RAG (CRAG) with self-grading, query rewriting,
-and optional query decomposition for complex multi-hop questions.
+Implements Corrective RAG (CRAG) with Flashrank reranking, query rewriting,
+optional query decomposition, and human-in-the-loop web search.
 
-Graph Flow::
+Graph Flow (9 Nodes)::
 
     START
       │
       ▼
-    route_query ──► complexity?
-      │                       │
-      │ simple                │ complex
-      ▼                       ▼
-    retrieve              plan_query
-      │                       │
-      │                       ▼
-      │                   retrieve (per sub-query)
-      │                       │
-      ▼◄──────────────────────┘
-    grade_documents
-      │
-      ▼
-    enough relevant docs?
-      │              │
-      │ yes          │ no (retry ≤ 3)
-      ▼              ▼
-    generate     rewrite_query ──► retrieve ──► grade_documents
-      │
-      ▼
-     END
+    condense_question ──► route_query ──► complexity?
+                            │         │            │
+                            │ cached  │ simple     │ complex
+                            │ / ood   ▼            ▼
+                            ▼       retrieve    plan_query
+                           END        │            │
+                                      │            ▼
+                                      │        retrieve (per sub-query)
+                                      │            │
+                                      ▼◄───────────┘
+                                  rerank_documents (Flashrank)
+                                      │
+                                      ▼
+                                  relevant docs?
+                                    │       │          │
+                                    │ yes   │ no       │ no (exhausted retries)
+                                    ▼       ▼          ▼
+                                 generate  rewrite   ask_human_consent
+                                    │       │          │
+                                    ▼       ▼          ▼
+                                   END   retrieve   surf_and_ingest_node
+                                                       │
+                                                       ▼
+                                                    retrieve (loop back)
 
 Key design decisions:
 - Max 3 retrieval retries to avoid infinite loops
-- Documents below relevance threshold are filtered out
-- RRF scores from hybrid retriever are preserved in metadata
+- Flashrank cross-encoder reranking with 0.80 relevance threshold
+- Web search results are chunked and stored in Pinecone before retrieval
 - Each node is a pure function over AgentState for testability
+- Split-Brain LLM: small_llm (256 tokens) for internal, primary_llm (4096) for generation
 """
 
 from __future__ import annotations
@@ -45,7 +49,6 @@ from typing import Any, Literal
 from langchain_core.language_models import BaseChatModel
 from langchain_core.documents import Document
 from langgraph.graph import END, StateGraph
-from langgraph.checkpoint.memory import MemorySaver
 from typing_extensions import TypedDict
 
 from finsight.rag.chains import (
@@ -54,6 +57,7 @@ from finsight.rag.chains import (
     build_rewriter_chain,
     build_router_chain,
     build_query_analyzer_chain,
+    build_condense_question_chain,
 )
 from finsight.rag.retriever import HybridRetriever
 from finsight.utils.query_cache import query_cache
@@ -65,6 +69,9 @@ logger = logging.getLogger(__name__)
 # Agent State
 # ======================================================================
 
+from langgraph.graph.message import add_messages
+from typing import Annotated
+
 class AgentState(TypedDict, total=False):
     """State maintained across the agentic RAG loop.
 
@@ -73,6 +80,7 @@ class AgentState(TypedDict, total=False):
     they modify.
 
     Attributes:
+        chat_history: Conversational memory appended automatically.
         question: Original user question.
         sub_queries: Decomposed sub-queries (populated for complex queries).
         current_query: The query currently being processed (may be rewritten).
@@ -84,8 +92,11 @@ class AgentState(TypedDict, total=False):
         max_retries: Maximum allowed retries (default 3).
         route: Query classification — ``"simple"`` or ``"complex"``.
         error: Error message if something went wrong.
+        active_filters: Metadata filters applied during retrieval.
     """
-
+    
+    chat_history: Annotated[list[Any], add_messages]
+    session_id: str
     question: str
     sub_queries: list[str]
     current_query: str
@@ -95,8 +106,10 @@ class AgentState(TypedDict, total=False):
     relevance_scores: list[dict[str, Any]]
     retry_count: int
     max_retries: int
-    route: str
+    route: Literal["simple", "complex", "cached", "out_of_domain"]
     error: str
+    active_filters: dict[str, Any]
+    human_consent: bool
 
 
 # ======================================================================
@@ -114,6 +127,7 @@ def _make_route_query(router_chain):
         question = state["question"]
         logger.info("Routing query: %.120s", question)
         
+        from langchain_core.messages import AIMessage
         # Check cache first
         cached_answer = query_cache.get(question)
         if cached_answer:
@@ -122,6 +136,7 @@ def _make_route_query(router_chain):
                 "route": "cached",
                 "current_query": question,
                 "generation": cached_answer,
+                "chat_history": [AIMessage(content=cached_answer)],
                 "retry_count": 0,
             }
 
@@ -136,6 +151,17 @@ def _make_route_query(router_chain):
         except Exception:
             logger.exception("Router chain failed — defaulting to 'simple'.")
             route = "simple"
+
+        if route == "out_of_domain":
+            err_msg = "I am an AI Financial Analyst. I can help with corporate strategy, SEC filings, and financial performance. Or, you can ask me about documents you have explicitly uploaded."
+            return {
+                "route": route,
+                "current_query": question,
+                "generation": err_msg,
+                "chat_history": [AIMessage(content=err_msg)],
+                "retry_count": 0,
+                "max_retries": state.get("max_retries", 3),
+            }
 
         return {
             "route": route,
@@ -197,6 +223,7 @@ def _make_retrieve(retriever: HybridRetriever, analyzer_chain):
         """Retrieve documents using hybrid search."""
         route = state.get("route", "simple")
         all_documents = list(state.get("all_documents", []))
+        session_id = state.get("session_id", "finsight")
 
         def _extract_filters(q: str) -> dict[str, Any] | None:
             try:
@@ -210,16 +237,20 @@ def _make_retrieve(retriever: HybridRetriever, analyzer_chain):
             # Complex path: retrieve for all sub-queries
             sub_queries = state["sub_queries"]
             documents: list[Document] = []
+            merged_filters = {}
 
             for sq in sub_queries:
                 filters = _extract_filters(sq)
+                if filters:
+                    merged_filters.update(filters)
                 logger.info("Retrieving for sub-query: %.120s with filters %s", sq, filters)
-                results = retriever.retrieve(sq, top_k=5, filter=filters)
+                results = retriever.retrieve(sq, namespace=session_id, top_k=40, filter=filters, vector_weight=40)
                 documents.extend(results)
 
             # Deduplicate across sub-queries
             documents = _deduplicate_documents(documents)
             all_documents.extend(documents)
+            filters = merged_filters
 
             logger.info(
                 "Complex retrieval: %d total documents across %d sub-queries.",
@@ -231,11 +262,12 @@ def _make_retrieve(retriever: HybridRetriever, analyzer_chain):
             current_query = state.get("current_query", state["question"])
             filters = _extract_filters(current_query)
             logger.info("Retrieving for query: %.120s with filters %s", current_query, filters)
-            documents = retriever.retrieve(current_query, top_k=5, filter=filters)
+            documents = retriever.retrieve(current_query, namespace=session_id, top_k=40, filter=filters, vector_weight=40)
 
         return {
             "documents": documents,
             "all_documents": all_documents if route == "complex" else documents,
+            "active_filters": filters or {},
         }
 
     return retrieve
@@ -280,22 +312,41 @@ def _make_rerank_documents():
         relevant_docs: list[Document] = []
         relevance_scores: list[dict[str, Any]] = []
         
-        # Take Top 4
-        top_n = min(4, len(results))
+        # Take Top 4 and apply a strict relevance threshold
+        # Flashrank scores are typically probabilities [0, 1].
+        # We use 0.50 as a cutoff to ensure only relevant docs are passed.
+        # If no docs pass this threshold, it will trigger the query rewrite/web search fallback.
+        active_filters = state.get("active_filters", {})
+        is_upload_query = active_filters.get("type") == "user_upload"
+
+        top_n = min(20, len(results))
         for res in results[:top_n]:
             idx = res.get("id")
             score = res.get("score", 0.0)
-            if idx is not None and 0 <= idx < len(documents):
-                doc = documents[idx]
-                relevant_docs.append(doc)
-                relevance_scores.append({
-                    "doc_index": idx,
-                    "relevant": True,
-                    "reasoning": f"Flashrank score: {float(score):.4f}",
-                    "source": doc.metadata.get("source", "unknown"),
-                })
-                logger.debug("  Doc %d: Score %.4f", idx, score)
+            
+            if idx is None or not (0 <= idx < len(documents)):
+                continue
                 
+            # Flashrank scores are typically probabilities [0, 1].
+            # We use 0.10 as a cutoff to allow tangentially relevant chunks (like data tables) 
+            # while blocking completely irrelevant documents (which score < 0.01).
+            if float(score) < 0.10:
+                doc_type = doc.metadata.get("type")
+                if is_upload_query and doc_type == "user_upload":
+                    pass # Keep it
+                else:
+                    logger.info("  Doc %d: Score %.4f (Below threshold, discarding)", idx, score)
+                    continue
+                
+            relevant_docs.append(doc)
+            relevance_scores.append({
+                "doc_index": idx,
+                "relevant": True,
+                "reasoning": f"Flashrank score: {float(score):.4f}",
+                "source": doc.metadata.get("source", "unknown"),
+            })
+            logger.info("  Doc %d: Score %.4f (Kept)", idx, score)
+            logger.info("  Doc %d Content snippet: %.200s...", idx, doc.page_content.replace('\n', ' '))
         logger.info(
             "Reranking complete: kept top %d documents.",
             len(relevant_docs)
@@ -303,6 +354,7 @@ def _make_rerank_documents():
 
         return {
             "documents": relevant_docs,
+            "all_documents": relevant_docs,
             "relevance_scores": relevance_scores,
         }
 
@@ -419,7 +471,11 @@ def _make_generate(generator_chain):
                 "Please try again."
             )
 
-        return {"generation": generation}
+        from langchain_core.messages import AIMessage
+        return {
+            "generation": generation,
+            "chat_history": [AIMessage(content=generation)]
+        }
 
     return generate
 
@@ -446,7 +502,7 @@ def _should_retrieve_or_plan(state: AgentState) -> Literal["retrieve", "plan_que
     return "retrieve"
 
 
-def _should_generate_or_rewrite(state: AgentState) -> Literal["generate", "rewrite_query"]:
+def _should_generate_or_rewrite(state: AgentState) -> Literal["generate", "rewrite_query", "ask_human_consent"]:
     """Decide whether to generate an answer or rewrite the query.
 
     Generates if:
@@ -457,7 +513,7 @@ def _should_generate_or_rewrite(state: AgentState) -> Literal["generate", "rewri
     - No relevant documents found AND retries remain.
 
     Returns:
-        ``"generate"`` or ``"rewrite_query"``.
+        ``"generate"``, ``"rewrite_query"``, or ``"ask_human_consent"``.
     """
     documents = state.get("documents", [])
     retry_count = state.get("retry_count", 0)
@@ -472,10 +528,10 @@ def _should_generate_or_rewrite(state: AgentState) -> Literal["generate", "rewri
 
     if retry_count >= max_retries:
         logger.warning(
-            "No relevant docs after %d retries → generating with best effort.",
+            "No relevant docs after %d retries → asking human consent to web search.",
             retry_count,
         )
-        return "generate"
+        return "ask_human_consent"
 
     logger.info(
         "No relevant docs (retry %d/%d) → rewriting query.",
@@ -484,6 +540,72 @@ def _should_generate_or_rewrite(state: AgentState) -> Literal["generate", "rewri
     )
     return "rewrite_query"
 
+
+# ======================================================================
+# Human-in-the-Loop & Web Search
+# ======================================================================
+
+def ask_human_consent(state: AgentState) -> AgentState:
+    from langgraph.types import interrupt
+    logger.info("Pausing graph execution to ask for human consent...")
+    
+    # Interrupt execution and wait for the user to resume
+    consent = interrupt("For this question I would have to surf the web and collate info. Should I proceed?")
+    
+    if consent is True or consent == "proceed":
+        logger.info("Human granted consent for web search.")
+        return {"route": "surf"}
+    else:
+        logger.info("Human denied consent.")
+        return {"route": "cancel", "generation": "Search cancelled by user."}
+
+
+def surf_and_ingest_node(state: AgentState) -> AgentState:
+    from finsight.tools.web_surfer import surf_and_ingest
+    
+    # Use the original question rather than a heavily rewritten query
+    # which might exceed Tavily's 400 character limit.
+    original_query = state["question"]
+    # Truncate just to be completely safe against Tavily 400 char limit
+    search_query = original_query[:350]
+    session_id = state.get("session_id", "finsight")
+    
+    logger.info("Executing surf_and_ingest node for: %s", search_query)
+    
+    # This downloads, chunks, and puts the results into Pinecone
+    ingested_docs = surf_and_ingest(search_query, namespace=session_id)
+    logger.info("Successfully ingested %d chunks to Pinecone.", len(ingested_docs))
+    
+    # We do NOT pass the ingested docs directly to generate!
+    # Instead, we clear the documents list and reset retry count, 
+    # and route back to the `retrieve` node to fetch the top 4 chunks cleanly.
+    return {
+        "documents": [],
+        "retry_count": 0,
+        "current_query": search_query, # Use this for retrieval
+    }
+
+
+def _should_surf_or_end(state: AgentState) -> Literal["surf_and_ingest_node", "END"]:
+    if state.get("human_consent"):
+        logger.info("Human consent granted → initiating web search.")
+        return "surf_and_ingest_node"
+    logger.info("Human consent denied → terminating pipeline.")
+    return "END"
+
+def _should_end_or_search(state: AgentState) -> Literal["ask_human_consent", "END"]:
+    """Self-RAG check: if the LLM explicitly states it lacks information, force a web search."""
+    generation = state.get("generation", "")
+    # The LLM is prompted to explicitly output this substring if it lacks information
+    if "I don't have enough information" in generation or "I do not have enough information" in generation:
+        # Check if we've already tried web searching and maxed out our budget
+        retry_count = state.get("retry_count", 0)
+        max_retries = state.get("max_retries", 3)
+        if retry_count < max_retries:
+            logger.warning("LLM admitted lack of information. Triggering web search fallback.")
+            return "ask_human_consent"
+            
+    return "END"
 
 # ======================================================================
 # Utility functions
@@ -524,6 +646,7 @@ def _deduplicate_documents(documents: list[Document]) -> list[Document]:
 def build_rag_agent(
     retriever: HybridRetriever,
     llm: BaseChatModel,
+    small_llm: BaseChatModel | None = None,
     fallback_llm: BaseChatModel | None = None,
     max_retries: int = 3,
 ) -> StateGraph:
@@ -540,6 +663,7 @@ def build_rag_agent(
     Args:
         retriever: HybridRetriever instance for document retrieval.
         llm: Primary LLM (e.g., Groq Llama 3.1 70B).
+        small_llm: Smaller LLM for routing and planning tasks.
         fallback_llm: Optional fallback LLM (e.g., Gemini Flash).
             Used for grading/routing to reduce primary LLM load.
             If None, the primary LLM is used for everything.
@@ -556,17 +680,17 @@ def build_rag_agent(
         ... })
         >>> print(result["generation"])
     """
-    # Use fallback LLM for cheaper operations (grading, routing)
-    # and primary LLM for generation/planning
-    grading_llm = fallback_llm or llm
-    routing_llm = fallback_llm or llm
+    grading_llm = small_llm or fallback_llm or llm
+    routing_llm = small_llm or fallback_llm or llm
+    planning_llm = small_llm or llm
 
     # Build individual chains
     router_chain = build_router_chain(routing_llm)
-    planner_chain = build_planner_chain(llm)
-    rewriter_chain = build_rewriter_chain(llm)
+    planner_chain = build_planner_chain(planning_llm)
+    rewriter_chain = build_rewriter_chain(planning_llm)
     generator_chain = build_generator_chain(llm)
     analyzer_chain = build_query_analyzer_chain(routing_llm)
+    condenser_chain = build_condense_question_chain(routing_llm)
 
     # Create node functions (closures over chains + retriever)
     route_query = _make_route_query(router_chain)
@@ -576,19 +700,49 @@ def build_rag_agent(
     rewrite_query = _make_rewrite_query(rewriter_chain)
     generate = _make_generate(generator_chain)
 
+    def _make_condense_question(condenser_chain):
+        def condense_question(state: AgentState) -> AgentState:
+            history = state.get("chat_history", [])
+            question = state["question"]
+            
+            # If history only has the current message or is empty, skip condensation
+            if not history or len(history) <= 1:
+                return {"question": question}
+            
+            logger.info("Condensing query using chat history...")
+            # We pass the history excluding the latest HumanMessage (which is the current question)
+            past_history = history[:-1]
+            history_str = "\n".join([f"{'Human' if msg.type == 'human' else 'AI'}: {msg.content}" for msg in past_history[-4:]]) # only keep last 4 to prevent context bloat
+            
+            condensed = condenser_chain.invoke({
+                "chat_history": history_str,
+                "question": question
+            })
+            logger.info("Condensed query: %s", condensed)
+            return {"question": condensed}
+        return condense_question
+
+    condense_question_node = _make_condense_question(condenser_chain)
+    
     # ---- Build the graph ----
     workflow = StateGraph(AgentState)
 
     # Add nodes
+    workflow.add_node("condense_question", condense_question_node)
     workflow.add_node("route_query", route_query)
     workflow.add_node("plan_query", plan_query)
     workflow.add_node("retrieve", retrieve)
     workflow.add_node("rerank_documents", rerank_documents)
     workflow.add_node("rewrite_query", rewrite_query)
     workflow.add_node("generate", generate)
+    
+    # HITL Nodes
+    workflow.add_node("ask_human_consent", ask_human_consent)
+    workflow.add_node("surf_and_ingest_node", surf_and_ingest_node)
 
     # Set entry point
-    workflow.set_entry_point("route_query")
+    workflow.set_entry_point("condense_question")
+    workflow.add_edge("condense_question", "route_query")
 
     # Add conditional edge: route_query → retrieve OR plan_query OR END
     workflow.add_conditional_edges(
@@ -607,24 +761,51 @@ def build_rag_agent(
     # retrieve → rerank_documents
     workflow.add_edge("retrieve", "rerank_documents")
 
-    # Conditional edge: rerank_documents → generate OR rewrite_query
+    # Conditional edge: rerank_documents → generate OR rewrite_query OR ask_human_consent
     workflow.add_conditional_edges(
         "rerank_documents",
         _should_generate_or_rewrite,
         {
             "generate": "generate",
             "rewrite_query": "rewrite_query",
+            "ask_human_consent": "ask_human_consent",
         },
     )
 
     # rewrite_query → retrieve (retry loop)
     workflow.add_edge("rewrite_query", "retrieve")
 
-    # generate → END
-    workflow.add_edge("generate", END)
+    # ask_human_consent → conditional to surf or END
+    workflow.add_conditional_edges(
+        "ask_human_consent",
+        _should_surf_or_end,
+        {
+            "surf_and_ingest_node": "surf_and_ingest_node",
+            "END": END,
+        }
+    )
 
-    # Compile with in-memory checkpointer for conversation state
-    checkpointer = MemorySaver()
+    # surf_and_ingest_node → retrieve
+    # (After ingesting to Pinecone, we loop back to retrieve the top 4 chunks)
+    workflow.add_edge("surf_and_ingest_node", "retrieve")
+
+    # generate → END or ask_human_consent
+    workflow.add_conditional_edges(
+        "generate",
+        _should_end_or_search,
+        {
+            "ask_human_consent": "ask_human_consent",
+            "END": END,
+        }
+    )
+
+    # Compile with persistent Sqlite checkpointer for session state
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    import sqlite3
+    
+    conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
+    checkpointer = SqliteSaver(conn)
+    
     compiled_graph = workflow.compile(checkpointer=checkpointer)
 
     logger.info("RAG agent graph compiled successfully (max_retries=%d).", max_retries)

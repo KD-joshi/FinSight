@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+import datetime
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
@@ -23,17 +24,17 @@ from langchain_core.runnables import RunnableSerializable
 
 logger = logging.getLogger(__name__)
 
-
+CURRENT_YEAR = datetime.datetime.now().year
 
 
 # ======================================================================
 # 2. QUERY REWRITER
 # ======================================================================
 
-REWRITER_SYSTEM_PROMPT = """\
+REWRITER_SYSTEM_PROMPT = f"""\
 You are a query optimization specialist for a financial document retrieval system
 that searches SEC filings (10-K, 10-Q, 8-K), earnings reports, and corporate
-financial disclosures.
+financial disclosures. The current year is {CURRENT_YEAR}.
 
 Your task is to rewrite a user's question to improve retrieval from a vector
 database. The original query failed to retrieve sufficiently relevant documents.
@@ -43,7 +44,7 @@ Rewriting strategies:
    (e.g., "AAPL" → "Apple Inc. (AAPL)")
 2. **Expand financial terms**: Spell out abbreviations
    (e.g., "EPS" → "earnings per share (EPS)")
-3. **Add temporal context**: Include fiscal year or quarter references
+3. **Add temporal context**: Include fiscal year or quarter references. When the user asks for the 'latest' or 'most recent' data, explicitly inject {CURRENT_YEAR} (or {CURRENT_YEAR - 1} if {CURRENT_YEAR} annual reports aren't out yet) into the search query.
 4. **Use SEC filing language**: Match the formal language used in 10-K/10-Q filings
    (e.g., "revenue" → "total net revenue" or "net sales")
 5. **Decompose compound queries**: If the query asks multiple things, focus on the
@@ -90,10 +91,9 @@ def build_rewriter_chain(llm: BaseChatModel) -> RunnableSerializable[dict[str, A
 # 3. ANSWER GENERATOR
 # ======================================================================
 
-GENERATOR_SYSTEM_PROMPT = """\
-You are FinSight, an expert financial analyst assistant. You answer questions
-about companies' financial performance, SEC filings, and corporate disclosures
-using ONLY the provided context documents.
+GENERATOR_SYSTEM_PROMPT = f"""\
+You are FinSight, an expert financial analyst and document assistant. The current year is {CURRENT_YEAR}. You answer questions
+based ONLY on the provided context documents (which may be SEC filings, web research, or user-uploaded files like resumes).
 
 STRICT RULES — you MUST follow these without exception:
 
@@ -119,10 +119,18 @@ STRICT RULES — you MUST follow these without exception:
    context, say so. Do not estimate, interpolate, or guess.
 
 6. **Structure your response clearly.** Use headers, bullet points, and
-   tables where appropriate to present financial data clearly.
+   tables where appropriate to present data clearly.
 
 7. **Compare carefully.** When asked to compare metrics across periods or
-   companies, clearly label which number belongs to which entity/period."""
+   companies, clearly label which number belongs to which entity/period.
+
+8. **Prioritize the latest information.** If context documents contain conflicting data
+   for the same metric across different dates, ALWAYS use the most recent data
+   available in the context (e.g., use {CURRENT_YEAR} data over {CURRENT_YEAR - 2} data).
+
+9. **Verify Mathematical Consistency.** When pulling financial figures (e.g., Revenue, Gross Profit, Margins) from messy context documents, quickly audit them for mathematical consistency (e.g., does Gross Profit / Revenue equal the stated Gross Margin?). If the extracted numbers contradict each other, explicitly warn the user that the source document appears to have data extraction errors and do not present the contradictory numbers as absolute fact.
+
+10. **Do NOT dump the raw context.** You must cite sources inline (e.g., [Source: Document 1]), but DO NOT create a "Sources & Evidence" section at the end and DO NOT copy-paste the raw text of the context documents into your answer."""
 
 GENERATOR_USER_PROMPT = """\
 Question: {question}
@@ -167,6 +175,7 @@ Classify the user's question into one of two categories:
 - Single-company, single-metric queries ("What was Apple's revenue in 2024?")
 - Direct factual lookups ("Who is Tesla's CEO?")
 - Single time period questions ("What risks did Google disclose in their 2024 10-K?")
+- Questions about user uploaded documents ("What is this guy's specialty from the resume?")
 
 **complex** — The question requires multi-hop reasoning or multiple retrievals:
 - Cross-company comparisons ("Compare Apple and Google's revenue growth")
@@ -175,8 +184,13 @@ Classify the user's question into one of two categories:
 - Cause-and-effect questions spanning multiple filing sections
 - Questions involving calculations from multiple data points
 
+**out_of_domain** — The question is completely unrelated to finance, corporate strategy, investing, or the documents the user explicitly uploaded:
+- Small talk or general knowledge ("What is the capital of France?", "Write a poem")
+- Off-topic advice ("How do I bake a cake?")
+- Note: DO NOT classify as out_of_domain if the user is asking about an uploaded document (e.g. "what is the highlight of this resume?").
+
 Respond with a JSON object containing exactly two fields:
-- "complexity": "simple" or "complex"
+- "complexity": "simple", "complex", or "out_of_domain"
 - "reasoning": string (1 sentence explaining the classification)
 
 Do NOT include any text outside the JSON object."""
@@ -212,8 +226,9 @@ def build_router_chain(llm: BaseChatModel) -> RunnableSerializable[dict[str, Any
 # 5. QUERY PLANNER / DECOMPOSER
 # ======================================================================
 
-PLANNER_SYSTEM_PROMPT = """\
+PLANNER_SYSTEM_PROMPT = f"""\
 You are a query decomposition specialist for a financial document retrieval system.
+The current year is {CURRENT_YEAR}.
 
 Given a complex financial question, break it down into a sequence of simpler
 sub-queries that can each be answered with a single retrieval pass against
@@ -223,7 +238,7 @@ Decomposition guidelines:
 1. Each sub-query should target a SINGLE company, metric, and time period.
 2. Order sub-queries logically — gather data first, then compare/analyze.
 3. For comparison questions, create one sub-query per entity being compared.
-4. For trend analysis, create one sub-query per time period.
+4. For trend analysis, create one sub-query per time period. When decomposing "recent" or "latest" trends, explicitly use the most recent years (e.g., {CURRENT_YEAR}, {CURRENT_YEAR-1}).
 5. Include the company name/ticker in each sub-query for retrieval accuracy.
 6. Use specific SEC filing terminology (e.g., "total net revenue" instead of
    just "revenue").
@@ -232,16 +247,16 @@ Decomposition guidelines:
 Respond with a JSON object containing exactly one field:
 - "sub_queries": list of strings, each being a self-contained sub-query
 
-Example input: "Compare Apple and Tesla's revenue growth from 2023 to 2024"
+Example input: "Compare Apple and Tesla's revenue growth from {CURRENT_YEAR-1} to {CURRENT_YEAR}"
 Example output:
-{{
+{{{{
   "sub_queries": [
-    "What was Apple Inc. (AAPL) total net revenue for fiscal year 2023?",
-    "What was Apple Inc. (AAPL) total net revenue for fiscal year 2024?",
+    "What was Apple Inc. (AAPL) total net revenue for fiscal year {CURRENT_YEAR-1}?",
+    "What was Apple Inc. (AAPL) total net revenue for fiscal year {CURRENT_YEAR}?",
     "What was Tesla Inc. (TSLA) total automotive revenue for fiscal year 2023?",
     "What was Tesla Inc. (TSLA) total automotive revenue for fiscal year 2024?"
   ]
-}}
+}}}}
 
 Do NOT include any text outside the JSON object."""
 
@@ -279,18 +294,20 @@ def build_planner_chain(llm: BaseChatModel) -> RunnableSerializable[dict[str, An
 QUERY_ANALYZER_SYSTEM_PROMPT = """\
 You are an expert financial query analyzer. Your job is to extract metadata filters from a user's question to optimize database retrieval.
 
-Extract two optional fields:
+Extract three optional fields:
 1. "ticker": The stock ticker symbol (e.g., AAPL, TSLA, GOOGL, MSFT) if mentioned. If a company name is used instead, output its standard ticker.
 2. "fiscal_year": The 4-digit year (e.g., "2024", "2023") if mentioned.
+3. "type": If the user is specifically asking about an uploaded document (e.g. "my resume", "the uploaded file", "this document"), output exactly "user_upload".
 
 If a field is not mentioned, return null for that field.
-Respond with a JSON object containing exactly two fields: "ticker" and "fiscal_year".
+Respond with a JSON object containing exactly three fields: "ticker", "fiscal_year", and "type".
 
-Example input: "What was Apple's revenue in 2024?"
+Example input: "What is this guy's specialty from his resume?"
 Example output:
 {
-  "ticker": "AAPL",
-  "fiscal_year": "2024"
+  "ticker": null,
+  "fiscal_year": null,
+  "type": "user_upload"
 }
 """
 
@@ -322,39 +339,48 @@ def build_query_analyzer_chain(llm: BaseChatModel) -> RunnableSerializable[dict[
 
 
 # ======================================================================
+# 7. CONDENSE QUESTION (CONVERSATIONAL MEMORY)
+# ======================================================================
+
+CONDENSE_SYSTEM_PROMPT = f"""\
+Given a chat history and the latest user question which might reference context in the chat history, formulate a standalone question which can be understood without the chat history.
+
+For example, if the history mentions 'Apple Inc.' and the user asks 'What was their revenue?', you should rewrite it to 'What was Apple Inc. revenue?'.
+
+Do NOT answer the question, just reformulate it if needed and otherwise return it as is.
+The current year is {CURRENT_YEAR}. If the user asks for "latest" data, implicitly resolve that to the current temporal context.
+Return ONLY the standalone question."""
+
+def build_condense_question_chain(llm: BaseChatModel) -> RunnableSerializable[dict[str, Any], str]:
+    """Build the conversational memory condensation chain."""
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", CONDENSE_SYSTEM_PROMPT),
+        ("human", "Chat History:\n{chat_history}\n\nLatest Question: {question}\n\nRewrite the latest question into a standalone query. Return ONLY the new query."),
+    ])
+    chain = prompt | llm | StrOutputParser()
+    return chain
+
+
+# ======================================================================
 # Convenience: Build all chains at once
 # ======================================================================
 
 def build_all_chains(
     llm: BaseChatModel,
+    small_llm: BaseChatModel | None = None,
 ) -> dict[str, RunnableSerializable]:
-    """Build all RAG chains with the given LLM.
+    """Build all RAG chains with the given LLMs."""
+    if small_llm is None:
+        small_llm = llm
 
-    Convenience function that constructs every chain needed by the
-    LangGraph agentic pipeline.
-
-    Args:
-        llm: Primary language model instance (e.g., Groq Llama 3.1 70B).
-
-    Returns:
-        Dictionary mapping chain names to LCEL chain instances::
-
-            {
-                "grader": ...,
-                "rewriter": ...,
-                "generator": ...,
-                "router": ...,
-                "planner": ...,
-                "analyzer": ...,
-            }
-    """
     chains = {
-        "grader": build_grader_chain(llm),
-        "rewriter": build_rewriter_chain(llm),
-        "generator": build_generator_chain(llm),
-        "router": build_router_chain(llm),
-        "planner": build_planner_chain(llm),
-        "analyzer": build_query_analyzer_chain(llm),
+        "grader": build_grader_chain(small_llm),
+        "rewriter": build_rewriter_chain(small_llm),
+        "generator": build_generator_chain(llm),  # Only generator gets the big LLM
+        "router": build_router_chain(small_llm),
+        "planner": build_planner_chain(small_llm),
+        "analyzer": build_query_analyzer_chain(small_llm),
+        "condenser": build_condense_question_chain(small_llm),
     }
     logger.info("Built %d RAG chains: %s", len(chains), list(chains.keys()))
     return chains

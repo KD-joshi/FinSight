@@ -1,9 +1,14 @@
-"""Hybrid retriever combining dense (Qdrant) and sparse (BM25) search.
+"""Hybrid retriever combining dense (Pinecone) and sparse (BM25) search.
 
 Uses Reciprocal Rank Fusion (RRF) to merge results from both retrievers,
 providing robust retrieval that captures both semantic similarity and
 keyword relevance — critical for financial documents where exact terms
 (ticker symbols, metric names, dollar amounts) matter as much as meaning.
+
+Note:
+    BM25 sparse retrieval is currently disabled when running against
+    Pinecone Serverless (initialised with ``documents=[]``). Only
+    dense vector search is active.
 
 References:
     - RRF Paper: Cormack, Clarke, Buettcher (2009)
@@ -30,7 +35,7 @@ class HybridRetriever:
     Uses Reciprocal Rank Fusion (RRF) to merge ranked results from two
     fundamentally different retrieval strategies:
 
-    - **Dense retrieval** (Qdrant): Captures semantic similarity via embeddings.
+    - **Dense retrieval** (Pinecone): Captures semantic similarity via embeddings.
       Good for paraphrased questions, conceptual queries.
     - **Sparse retrieval** (BM25): Captures lexical overlap via term frequency.
       Good for exact matches, ticker symbols, specific metric names.
@@ -42,7 +47,6 @@ class HybridRetriever:
     high-ranking documents, making the fusion more robust.
 
     Attributes:
-        vector_store: QdrantVectorStore instance for dense retrieval.
         documents: All ingested documents (used for BM25 index).
         k: RRF fusion constant. Higher values = more equal weighting.
         bm25_index: Pre-built BM25Okapi index over document corpus.
@@ -51,21 +55,15 @@ class HybridRetriever:
 
     def __init__(
         self,
-        vector_store: Any,
         documents: list[Document],
         k: int = 60,
     ) -> None:
         """Initialize the hybrid retriever.
 
         Args:
-            vector_store: A LangChain-compatible vector store (e.g.,
-                QdrantVectorStore) that supports ``similarity_search``.
             documents: List of all documents to index for BM25 search.
-                These should be the same documents stored in the vector DB.
             k: RRF fusion constant. Default 60 per the original paper.
-                Higher values reduce the advantage of top-ranked docs.
         """
-        self.vector_store = vector_store
         self.documents = documents
         self.k = k
 
@@ -131,26 +129,30 @@ class HybridRetriever:
     def _vector_search(
         self,
         query: str,
+        namespace: str,
         top_k: int = 10,
         filter_dict: dict[str, Any] | None = None,
     ) -> list[Document]:
-        """Dense retrieval using the Qdrant vector store.
+        """Dense retrieval using the Pinecone vector store.
 
         Args:
             query: User question or search query.
+            namespace: Session-specific Pinecone namespace.
             top_k: Maximum number of documents to return.
-            filter_dict: Optional metadata filter passed to Qdrant.
+            filter_dict: Optional metadata filter passed to Pinecone.
                 Example: ``{"company": "AAPL", "filing_type": "10-K"}``
 
         Returns:
             Ranked list of Document objects, most relevant first.
         """
+        from finsight.ingestion.vector_store import get_vector_store
         try:
+            vector_store = get_vector_store(namespace)
             kwargs: dict[str, Any] = {"k": top_k}
             if filter_dict:
                 kwargs["filter"] = filter_dict
 
-            results = self.vector_store.similarity_search(query, **kwargs)
+            results = vector_store.similarity_search(query, **kwargs)
             logger.debug(
                 "Vector search returned %d results for query: %.80s",
                 len(results),
@@ -321,6 +323,7 @@ class HybridRetriever:
     def retrieve(
         self,
         query: str,
+        namespace: str = "finsight",
         top_k: int = 5,
         filter: dict[str, Any] | None = None,  # noqa: A002
         vector_weight: int = 10,
@@ -360,7 +363,7 @@ class HybridRetriever:
         logger.info("Hybrid retrieval for query: %.120s", query)
 
         # 1. Run both retrieval strategies
-        vector_results = self._vector_search(query, top_k=vector_weight, filter_dict=filter)
+        vector_results = self._vector_search(query, namespace, top_k=vector_weight, filter_dict=filter)
         bm25_results = self._bm25_search(query, top_k=bm25_weight, filter_dict=filter)
 
         logger.info(

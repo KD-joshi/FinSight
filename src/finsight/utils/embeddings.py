@@ -1,9 +1,11 @@
 """Embedding provider using HuggingFace models.
 
-Uses the sentence-transformers library via ``langchain_community``.
+Uses the sentence-transformers library via ``langchain_huggingface``.
 This module exposes a thin wrapper that returns a configured
 ``HuggingFaceEmbeddings`` instance, ready for use with LangChain
 vector stores and retrieval chains.
+
+Default model: ``all-MiniLM-L6-v2`` (384 dimensions).
 
 Usage::
 

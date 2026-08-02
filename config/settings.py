@@ -45,6 +45,11 @@ class Settings(BaseSettings):
         default="",
         description="Pinecone API key.",
     )
+    # LlamaParse & Web Tools
+    llama_parse_api_key: Optional[str] = Field(default=None)
+    tavily_api_key: Optional[str] = Field(default=None)
+
+    # Logging & Path
     pinecone_index_name: str = Field(
         default="finsight",
         description="Name of the Pinecone index.",
@@ -67,7 +72,7 @@ class Settings(BaseSettings):
 
     # ── Model Configuration ──────────────────────────────────────────
     groq_model: str = Field(
-        default="llama-3.3-70b-versatile",
+        default="openai/gpt-oss-120b",
         description="Primary Groq chat model.",
     )
     groq_fallback_model: str = Field(
@@ -75,16 +80,16 @@ class Settings(BaseSettings):
         description="Smaller Groq model used when the primary is rate-limited.",
     )
     gemini_model: str = Field(
-        default="gemini-2.0-flash",
+        default="gemini-3.6-flash",
         description="Google Gemini model used as a secondary fallback LLM.",
     )
     embedding_model: str = Field(
-        default="models/text-embedding-004",
-        description="Google embedding model identifier.",
+        default="all-MiniLM-L6-v2",
+        description="HuggingFace embedding model identifier.",
     )
     embedding_dimension: int = Field(
-        default=768,
-        description="Dimensionality of the embedding vectors.",
+        default=384,
+        description="Dimensionality of the embedding vectors (384 for all-MiniLM-L6-v2).",
     )
 
     # ── Chunking Defaults ────────────────────────────────────────────

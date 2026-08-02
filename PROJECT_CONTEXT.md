@@ -3,61 +3,76 @@
 **Project**: FinSight — Agentic RAG for Financial Intelligence
 
 ## 1. Project Overview
-FinSight is a production-grade Agentic Retrieval-Augmented Generation (RAG) system specifically designed for SEC filings and financial documents. It leverages advanced orchestration patterns like Corrective RAG (CRAG) using LangGraph and LangChain, enabling sophisticated multi-hop reasoning over financial data.
+FinSight is a production-grade Agentic Retrieval-Augmented Generation (RAG) system specifically designed for SEC filings and financial documents. It leverages advanced orchestration patterns like Corrective RAG (CRAG) using LangGraph and LangChain, enabling sophisticated multi-hop reasoning over financial data with human-in-the-loop web search.
 
 ## 2. Current State & Completed Work
-Based on the `task.md` and codebase structure, the backend pipeline is largely complete. We have successfully built the core RAG logic.
 
-### 2.1 Backend Pipeline (Completed)
-- **Ingestion**: We built tools to download and process SEC filings (`sec_downloader.py`, `document_processor.py`), chunking them and embedding them using Google Gemini (`text-embedding-004`).
-- **Vector Store**: Configured and connected to Qdrant Cloud.
-- **Hybrid Search**: Implemented a hybrid retriever (`HybridRetriever`) combining dense vector search (Qdrant) and sparse search (BM25), fused with Reciprocal Rank Fusion (RRF). Reranking is additionally performed using a local cross-encoder (`Flashrank`).
-- **Agentic Loop (LangGraph)**: The `agents/graph.py` implements a complex state graph:
-  - **Router**: Routes simple vs. complex queries.
-  - **Planner**: Decomposes complex queries into sub-queries.
-  - **Retriever**: Executes hybrid search.
-  - **Grader**: Self-grades the retrieved documents.
-  - **Rewriter**: Rewrites the query if the documents are not relevant, with a max-retry limit.
-  - **Generator**: Uses primary LLM (Groq Llama 3.1 70B) to generate a cited answer.
-- **API (FastAPI)**: A FastAPI server (`api/main.py`) with predefined schemas (`api/schemas.py`), endpoints (`api/routes.py`), and CORS configurations is fully operational.
-- **Observability & Evaluation**: Integrated Langfuse for tracing and RAGAS for evaluation.
+### 2.1 Backend Pipeline (Complete)
+- **Ingestion**: Tools to download and process SEC filings (`sec_downloader.py`, `document_processor.py`), chunking them with Docling and embedding them with HuggingFace (`all-MiniLM-L6-v2`).
+- **Vector Store**: Pinecone Serverless with namespace-per-session isolation.
+- **Retrieval**: Dense vector search via Pinecone. BM25 sparse search is implemented but currently disabled (Pinecone Serverless doesn't support scanning all docs for local BM25 index). Reranking performed using a local cross-encoder (Flashrank, threshold 0.80).
+- **Agentic Loop (LangGraph)**: `agents/graph.py` implements a 9-node state graph:
+  - **Condenser**: Resolves conversational references ("their revenue" → "Apple's revenue") using chat history.
+  - **Router**: Classifies queries as `simple`, `complex`, `out_of_domain`, or `cached`.
+  - **Planner**: Decomposes complex queries into ≤5 sub-queries.
+  - **Retriever**: Executes Pinecone vector search (namespace = session_id).
+  - **Reranker**: Flashrank cross-encoder scoring with 0.80 threshold.
+  - **Rewriter**: Rewrites the query if documents are not relevant, with max 3 retries.
+  - **Generator**: Uses primary LLM (Groq `openai/gpt-oss-120b`) to generate a cited answer.
+  - **HITL Consent**: Pauses execution and asks the user for permission to search the web.
+  - **Web Surfer**: Tavily web search → LlamaParse (PDFs) → chunk → ingest to Pinecone → loop back to retriever.
+- **API (FastAPI)**: REST endpoints for chat, session management, document upload, and HITL consent resume.
+- **Frontend (Next.js)**: Chat interface with session management, consent UI, document upload, and session history with human-readable titles.
+- **Observability**: Langfuse integration for tracing (configured but optional).
 
 ### 2.2 Tech Stack
-- **Models**: Groq API (Llama 3.1 70B) for generation, Gemini Flash for fallback/grading.
-- **Embeddings**: Google Gemini (`text-embedding-004`).
-- **Vector Database**: Qdrant Cloud.
+- **Primary LLM**: Groq API (`openai/gpt-oss-120b`, 4096 max tokens) with Gemini 3.6 + Cohere fallbacks.
+- **Small LLM**: Same model capped at 256 max tokens for internal agents (Router, Planner, Rewriter, Condenser).
+- **Embeddings**: HuggingFace (`all-MiniLM-L6-v2`, 384 dimensions, local).
+- **Vector Database**: Pinecone Serverless.
+- **Reranking**: Flashrank (local cross-encoder).
+- **Web Search**: Tavily API.
+- **Document Parsing**: Docling (local PDFs), LlamaParse (uploads + web PDFs).
 - **Orchestration**: LangGraph & LangChain.
-- **Backend API**: FastAPI.
-- **Frontend**: Next.js/React (Under construction / Planned).
+- **Backend API**: FastAPI (Python).
+- **Frontend**: Next.js 15, React, TypeScript.
+- **Session Persistence**: SQLite (`checkpoints.sqlite`) via LangGraph `SqliteSaver`.
+- **Query Cache**: `query_cache.json` (exact-match, persistent).
+
+### 2.3 Token Optimization (Split-Brain Architecture)
+- **`small_llm` (256 tokens)**: Router, Planner, Rewriter, Analyzer, Condenser.
+- **`primary_llm` (4096 tokens)**: Generator only.
+- **Context cap**: Generator context hard-capped at 16,000 characters (~4K tokens).
+- **Fallback chain**: `Groq → Gemini → Cohere` via LangChain `.with_fallbacks()`.
 
 ## 3. What's Next (Pending Work)
-Looking at the task list, we are currently transitioning from backend finalization to Frontend development and deployment.
 
-1. **Frontend Development (Week 4/Final)**
-   - Build a polished React/Next.js frontend. The `frontend/` directory is created but needs the UI implementation.
-   - Connect the frontend to the existing FastAPI backend endpoint.
-   - Expected features: Chat interface with statement-level attribution/citations, source cards, and potentially Yahoo Finance integrations.
-
-2. **Refinement & Polish (Week 5)**
-   - Add conversation memory to the pipeline.
-   - Implement rate limit handling and robust Gemini fallbacks.
+1. **Refinement & Polish**
+   - Clean up BM25 sparse retrieval or remove it entirely.
    - Dockerize the application (`docker-compose.yaml`).
+   - Add rate limit handling improvements.
 
-3. **Advanced Fine-Tuning (Week 6 & 7)**
+2. **Advanced Fine-Tuning**
    - Fine-tune models specifically for financial Q&A using SFT (Supervised Fine-Tuning), DPO (Direct Preference Optimization), and GRPO on custom datasets via Colab.
 
 ## 4. Codebase Navigation Guide
-- `/src/finsight/agents/graph.py`: The heart of the agentic RAG loop. Read this to understand how queries flow and retry.
-- `/src/finsight/rag/chains.py`: Contains the LangChain prompts and LLM setup for each node in the graph (router, planner, grader, etc.).
-- `/src/finsight/rag/retriever.py`: Hybrid search logic.
-- `/src/finsight/api/main.py`: The FastAPI application entry point.
-- `/frontend/`: The Next.js web application root.
+- `/src/finsight/agents/graph.py`: The heart of the agentic RAG loop (9-node LangGraph state machine).
+- `/src/finsight/rag/chains.py`: LangChain prompts and LCEL chain builders for each agent.
+- `/src/finsight/rag/retriever.py`: Hybrid search logic (Pinecone + BM25 + RRF).
+- `/src/finsight/tools/web_surfer.py`: Tavily web search + LlamaParse + Pinecone ingestion.
+- `/src/finsight/api/routes.py`: FastAPI endpoints (chat, upload, sessions, HITL resume).
+- `/src/finsight/api/dependencies.py`: LLM and agent initialization factory.
+- `/src/finsight/utils/llm_provider.py`: Multi-tier LLM fallback logic.
+- `/src/finsight/utils/embeddings.py`: HuggingFace embedding provider.
+- `/src/finsight/ingestion/vector_store.py`: Pinecone vector store wrapper.
+- `/config/settings.py`: Centralized app configuration (pydantic-settings).
+- `/frontend/`: Next.js web application.
 
 ## 5. Instructions for LLM Agents
 When picking up a task on this project:
 1. **Understand the Goal**: We are aiming for a highly polished, production-grade AI financial tool. Follow the "Teacher Mode" guidelines specified in `.agents/AGENTS.md` (break down the What, Why, and How before writing complex code).
-2. **Consult task.md**: Always check `task.md` for the current checklist state.
+2. **Consult docs/architecture_diagram.md**: Full architecture documentation with Mermaid diagrams.
 3. **Frontend Aesthetic**: The UI must be visually excellent, employing modern design systems, clean typography, and smooth micro-animations.
 
 ---
-*Generated by Antigravity IDE Agent for seamless context continuation.*
+*Last updated: 2 Aug 2026*

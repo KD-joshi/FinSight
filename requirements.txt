@@ -15,9 +15,14 @@ langchain-pinecone>=0.1.0
 # LLM Providers
 langchain-cohere>=0.1.0
 
-# Document Processing
-docling>=2.0.0
-sec-edgar-downloader>=5.0.0
+# Ingestion & Parsing
+# Removed docling to save space
+llama-parse>=0.5.11
+python-multipart>=0.0.19
+
+# Agent & Tools
+tavily-python>=0.5.0
+langgraph-checkpoint-sqlite>=2.0.0
 
 # Search
 rank-bm25>=0.2.2
