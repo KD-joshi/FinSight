@@ -607,6 +607,9 @@ def surf_and_ingest_node(state: AgentState) -> AgentState:
     try:
         analysis = analyzer.invoke({"question": search_query})
         company_name = analysis.get("company_name")
+        optimized_query = analysis.get("optimized_search_query")
+        if optimized_query:
+            search_query = optimized_query[:350]
     except Exception:
         company_name = None
         

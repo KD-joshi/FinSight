@@ -294,14 +294,15 @@ def build_planner_chain(llm: BaseChatModel) -> RunnableSerializable[dict[str, An
 QUERY_ANALYZER_SYSTEM_PROMPT = """\
 You are an expert financial query analyzer. Your job is to extract metadata filters from a user's question to optimize database retrieval.
 
-Extract four optional fields:
+Extract five optional fields:
 1. "company_name": The full name of the company mentioned (e.g., "Apple", "Tesla", "Telus").
 2. "ticker": The stock ticker symbol (e.g., AAPL, TSLA) if mentioned or known.
 3. "fiscal_year": The 4-digit year (e.g., "2024", "2023") if mentioned.
 4. "type": If the user is specifically asking about an uploaded document (e.g. "my resume", "the uploaded file", "this document"), output exactly "user_upload".
+5. "optimized_search_query": A concise, highly optimized keyword search query designed for a search engine (like Google) to find the exact information requested. Remove conversational filler and include necessary dates or historical ranges (e.g. "2022 2023 2024").
 
-If a field is not mentioned, return null for that field.
-Respond with a JSON object containing exactly four fields: "company_name", "ticker", "fiscal_year", and "type".
+If a field is not mentioned or not applicable, return null for that field.
+Respond with a JSON object containing exactly five fields: "company_name", "ticker", "fiscal_year", "type", and "optimized_search_query".
 
 Example input: "What is this guy's specialty from his resume?"
 Example output:
@@ -309,7 +310,8 @@ Example output:
   "company_name": null,
   "ticker": null,
   "fiscal_year": null,
-  "type": "user_upload"
+  "type": "user_upload",
+  "optimized_search_query": "specialty skills"
 }
 """
 

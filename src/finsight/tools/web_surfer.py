@@ -29,7 +29,7 @@ def surf_and_ingest(query: str, namespace: str = "finsight", extra_metadata: dic
     
     try:
         # Search for content
-        response = tavily.search(query=query, search_depth="advanced", max_results=3)
+        response = tavily.search(query=query, search_depth="advanced", max_results=5)
         results = response.get("results", [])
         
         if not results:
