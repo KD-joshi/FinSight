@@ -397,6 +397,50 @@ def build_conversational_chain(llm: BaseChatModel) -> RunnableSerializable[dict[
     return chain
 
 # ======================================================================
+# ======================================================================
+# 9. ANSWER GRADER (SELF-REFLECTION)
+# ======================================================================
+
+ANSWER_GRADER_SYSTEM_PROMPT = """\
+You are a strict, expert evaluator checking if an AI-generated answer fully resolves the user's question.
+You will be given a user's question, and the generated answer.
+
+If the answer states that it does not have enough information, or if it provides an evasive answer that fails to actually address the core question, you must score it "no".
+If the answer directly and satisfactorily addresses the question, score it "yes".
+
+Output exactly a JSON object with one key: "score", with the value either "yes" or "no".
+
+Example 1:
+Question: "What is Apple's 2024 revenue?"
+Answer: "I do not have enough information in the provided documents to answer this."
+Output: {"score": "no"}
+
+Example 2:
+Question: "What is Apple's 2024 revenue?"
+Answer: "Apple's 2024 revenue was $394 billion."
+Output: {"score": "yes"}
+"""
+
+ANSWER_GRADER_USER_PROMPT = """\
+Question: {question}
+
+Generated Answer: {generation}
+
+Evaluate the answer. Respond with JSON only."""
+
+def build_answer_grader_chain(llm: BaseChatModel) -> RunnableSerializable[dict[str, Any], dict[str, str]]:
+    """Build the answer grader chain.
+    
+    Evaluates whether the generation actually answers the question.
+    """
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", ANSWER_GRADER_SYSTEM_PROMPT),
+        ("human", ANSWER_GRADER_USER_PROMPT),
+    ])
+    chain = prompt | llm | JsonOutputParser()
+    return chain
+
+# ======================================================================
 # Convenience: Build all chains at once
 # ======================================================================
 
@@ -417,6 +461,7 @@ def build_all_chains(
         "analyzer": build_query_analyzer_chain(small_llm),
         "condenser": build_condense_question_chain(small_llm),
         "conversational": build_conversational_chain(small_llm),
+        "answer_grader": build_answer_grader_chain(small_llm),
     }
     logger.info("Built %d RAG chains: %s", len(chains), list(chains.keys()))
     return chains

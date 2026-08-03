@@ -639,32 +639,56 @@ def _should_surf_or_end(state: AgentState) -> Literal["surf_and_ingest_node", "E
     logger.info("Human consent denied → terminating pipeline.")
     return "END"
 
-def _should_end_or_search(state: AgentState) -> Literal["ask_human_consent", "END"]:
-    """Self-RAG check: if the LLM explicitly states it lacks information, force a web search."""
-    generation = state.get("generation", "").lower()
-    
-    # The LLM is prompted to explicitly output this substring if it lacks information.
-    # Handle smart quotes, straight quotes, and slight variations.
-    lacks_info = (
-        "don't have enough information" in generation or 
-        "don’t have enough information" in generation or 
-        "do not have enough information" in generation or
-        "not have enough information" in generation
-    )
-    
-    if lacks_info:
-        if state.get("web_search_attempted"):
-            logger.warning("LLM still lacks information after web search. Terminating.")
+def _make_check_hallucinations_and_answer(answer_grader):
+    def _check_hallucinations_and_answer(state: AgentState) -> Literal["rewrite_query", "ask_human_consent", "END"]:
+        """Self-reflection: Grades if the generation answers the question."""
+        generation = state.get("generation", "")
+        question = state["question"]
+        
+        # Hardcoded heuristic check first for obvious failures
+        lacks_info = (
+            "don't have enough information" in generation.lower() or 
+            "don’t have enough information" in generation.lower() or 
+            "do not have enough information" in generation.lower() or
+            "not have enough information" in generation.lower()
+        )
+        
+        if lacks_info:
+            score = "no"
+            logger.warning("Generation failed heuristic check (lacks info).")
+        else:
+            try:
+                # Ask LLM grader if it answered the question
+                res = answer_grader.invoke({
+                    "question": question,
+                    "generation": generation
+                })
+                score = res.get("score", "yes")
+                logger.info("Answer grader score: %s", score)
+            except Exception:
+                logger.exception("Answer grader failed, defaulting to 'yes'.")
+                score = "yes"
+                
+        if score == "yes":
             return "END"
             
-        # Check if we've already tried web searching and maxed out our budget
         retry_count = state.get("retry_count", 0)
         max_retries = state.get("max_retries", 3)
+        
+        # If we still have retries, try rewriting and fetching better context
         if retry_count < max_retries:
-            logger.warning("LLM admitted lack of information. Triggering web search fallback.")
+            logger.warning("Answer graded as inadequate. Triggering retry loop (%d/%d).", retry_count + 1, max_retries)
+            return "rewrite_query"
+            
+        # If we are out of retries and haven't tried web search yet
+        if not state.get("web_search_attempted"):
+            logger.warning("Answer graded as inadequate and retries exhausted. Triggering web search.")
             return "ask_human_consent"
             
-    return "END"
+        logger.warning("Answer graded as inadequate, but all fallbacks exhausted. Ending.")
+        return "END"
+        
+    return _check_hallucinations_and_answer
 
 # ======================================================================
 # Utility functions
@@ -751,6 +775,8 @@ def build_rag_agent(
     analyzer_chain = build_query_analyzer_chain(routing_llm)
     condenser_chain = build_condense_question_chain(routing_llm)
     conversational_chain = build_conversational_chain(routing_llm)
+    from finsight.rag.chains import build_answer_grader_chain
+    answer_grader_chain = build_answer_grader_chain(routing_llm)
 
     # Create node functions (closures over chains + retriever)
     route_query = _make_route_query(router_chain, conversational_chain)
@@ -849,12 +875,14 @@ def build_rag_agent(
     # (After ingesting to Pinecone, we loop back to retrieve the top 4 chunks)
     workflow.add_edge("surf_and_ingest_node", "retrieve")
 
-    # generate → END or ask_human_consent
+    # generate → END, ask_human_consent, or rewrite_query (Self-Reflection Loop)
+    check_hallucinations = _make_check_hallucinations_and_answer(answer_grader_chain)
     workflow.add_conditional_edges(
         "generate",
-        _should_end_or_search,
+        check_hallucinations,
         {
             "ask_human_consent": "ask_human_consent",
+            "rewrite_query": "rewrite_query",
             "END": END,
         }
     )
