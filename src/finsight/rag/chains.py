@@ -413,12 +413,12 @@ Output exactly a JSON object with one key: "score", with the value either "yes" 
 Example 1:
 Question: "What is Apple's 2024 revenue?"
 Answer: "I do not have enough information in the provided documents to answer this."
-Output: {"score": "no"}
+Output: {{"score": "no"}}
 
 Example 2:
 Question: "What is Apple's 2024 revenue?"
 Answer: "Apple's 2024 revenue was $394 billion."
-Output: {"score": "yes"}
+Output: {{"score": "yes"}}
 """
 
 ANSWER_GRADER_USER_PROMPT = """\
