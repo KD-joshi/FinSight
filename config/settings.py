@@ -76,7 +76,7 @@ class Settings(BaseSettings):
         description="Primary Groq chat model.",
     )
     groq_fallback_model: str = Field(
-        default="llama-3.1-8b-instant",
+        default="openai/gpt-oss-120b",
         description="Smaller Groq model used when the primary is rate-limited.",
     )
     gemini_model: str = Field(
