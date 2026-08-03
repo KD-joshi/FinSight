@@ -30,9 +30,6 @@ from rich.theme import Theme
 # ======================================================================
 
 DEFAULT_COLLECTION = "finsight_docs"
-DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
-DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
-DEFAULT_EMBEDDING_MODEL = "models/text-embedding-004"
 
 BANNER = r"""
 ╔═══════════════════════════════════════════════════════════════╗
@@ -140,7 +137,7 @@ def _load_settings() -> dict[str, str]:
 
 
 def _init_llm(settings: dict[str, str]):
-    """Initialize the primary LLM (Groq) and fallback (Gemini).
+    """Initialize the primary LLM and small fallback LLM using the unified provider.
 
     Args:
         settings: Configuration dictionary with API keys.
@@ -148,25 +145,14 @@ def _init_llm(settings: dict[str, str]):
     Returns:
         Tuple of (primary_llm, fallback_llm).
     """
-    from langchain_groq import ChatGroq
-    from langchain_google_genai import ChatGoogleGenerativeAI
+    from finsight.utils.llm_provider import get_llm_with_fallback
+    from config.settings import settings as global_settings
 
-    primary_llm = ChatGroq(
-        model=DEFAULT_GROQ_MODEL,
-        api_key=settings["GROQ_API_KEY"],
-        temperature=0,
-        max_tokens=4096,
-        max_retries=2,
-    )
-    logger.info("Primary LLM: Groq %s", DEFAULT_GROQ_MODEL)
+    primary_llm = get_llm_with_fallback()
+    logger.info("Primary LLM initialized with 3-tier waterfall fallback (Groq -> Gemini -> Cohere)")
 
-    fallback_llm = ChatGoogleGenerativeAI(
-        model=DEFAULT_GEMINI_MODEL,
-        google_api_key=settings["GOOGLE_API_KEY"],
-        temperature=0,
-        max_output_tokens=4096,
-    )
-    logger.info("Fallback LLM: Gemini %s", DEFAULT_GEMINI_MODEL)
+    fallback_llm = get_llm_with_fallback(max_tokens=256)
+    logger.info("Small LLM initialized with 3-tier waterfall fallback (Groq -> Gemini -> Cohere)")
 
     return primary_llm, fallback_llm
 
