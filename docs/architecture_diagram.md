@@ -105,7 +105,7 @@ Defines the LangGraph `StateGraph` with 9 nodes and conditional edges. Manages `
 4. **PlannerChain** — Decomposes complex queries into ≤5 sub-queries
 5. **QueryAnalyzerChain** — Extracts metadata filters (`ticker`, `fiscal_year`, `type`)
 6. **CondenserChain** — Resolves conversational references using chat history
-7. **GraderChain** — (Defined in `build_all_chains` but **NOT used** in `graph.py`. Reranking via Flashrank replaced LLM-based grading.)
+7. **GraderChain** — Evaluates the generated answer to ensure it fully answers the user's question, triggering a fallback if it fails.
 
 ### [dependencies.py](file:///home/kuldeep-joshi/Desktop/finsight/src/finsight/api/dependencies.py) — Factory
 Creates and caches three LLM instances:
@@ -166,7 +166,10 @@ stateDiagram-v2
 
     SurfAndIngest --> Retrieve : Chunks saved to Pinecone, loop back
 
-    Generate --> END_done : Final cited answer
+    Generate --> CheckHallucinations : Final cited answer
+    CheckHallucinations --> END_done : Score YES
+    CheckHallucinations --> RewriteQuery : Score NO (retries < 3)
+    CheckHallucinations --> AskHumanConsent : Score NO (retries >= 3)
 ```
 
 ### Node Details
@@ -182,9 +185,7 @@ stateDiagram-v2
 | `ask_human_consent` | None | — | LangGraph `interrupt()`. Pauses execution, saves state to SQLite |
 | `surf_and_ingest_node` | None (no LLM) | — | Tavily search → LlamaParse → chunk → Pinecone. Loops back to `retrieve` |
 | `generate` | `primary_llm` | 4096 | Final answer with inline citations. Context hard-capped at 16K chars |
-
-> [!TIP]
-> **The "Grader" is NOT an LLM call.** The old architecture used an LLM-based grader chain to judge document relevance. The current implementation replaced this with **Flashrank** (a local cross-encoder model), which is faster, free, and doesn't consume API tokens. The `build_grader_chain` function still exists in `chains.py` but is only referenced in `build_all_chains()` — it is **never called** by `graph.py`.
+| `check_hallucinations` | `small_llm` (grader_llm) | 256 | Validates if the generated answer actually answers the question. |
 
 ---
 
@@ -301,7 +302,7 @@ Each chat session gets a unique `thread_id` (UUID). This ID is used in two place
 |-------|------|---------|
 | **Stale import** | [graph.py L48](file:///home/kuldeep-joshi/Desktop/finsight/src/finsight/agents/graph.py#L48) | `from langgraph.checkpoint.memory import MemorySaver` is imported but never used (we use `SqliteSaver` now) |
 | **Stale docstring** | [graph.py L1-37](file:///home/kuldeep-joshi/Desktop/finsight/src/finsight/agents/graph.py#L1-L37) | Module docstring still shows the old flow diagram without `condense_question`, `ask_human_consent`, or `surf_and_ingest_node` |
-| **Unused GraderChain** | [chains.py L377](file:///home/kuldeep-joshi/Desktop/finsight/src/finsight/rag/chains.py#L377) | `build_all_chains()` builds a grader chain, but `graph.py` never uses it (Flashrank replaced it) |
+
 | **Unused fallback_llm** | [dependencies.py L29](file:///home/kuldeep-joshi/Desktop/finsight/src/finsight/api/dependencies.py#L29) | `fallback_llm = get_fallback_llm()` is instantiated but passed as `None` to `build_rag_agent` |
 | **Stale retriever docstring** | [retriever.py L1-12](file:///home/kuldeep-joshi/Desktop/finsight/src/finsight/rag/retriever.py#L1-L12) | Module docstring references "Qdrant" but we use Pinecone |
 | **Stale PROJECT_CONTEXT.md** | [PROJECT_CONTEXT.md L13](file:///home/kuldeep-joshi/Desktop/finsight/PROJECT_CONTEXT.md#L13) | References "Qdrant Cloud" — should be "Pinecone Serverless" |
