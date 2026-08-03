@@ -231,11 +231,54 @@ class HybridRetriever:
         Returns:
             True if all filter conditions are satisfied.
         """
-        for key, value in filter_dict.items():
-            doc_value = doc.metadata.get(key)
-            if doc_value is None or doc_value != value:
-                return False
-        return True
+        # Handle empty filters
+        if not filter_dict:
+            return True
+            
+        def _evaluate_condition(condition: dict) -> bool:
+            for k, v in condition.items():
+                if k == "$or":
+                    if not isinstance(v, list):
+                        return False
+                    # Return True if ANY condition in the $or list is True
+                    if not any(_evaluate_condition(sub_cond) for sub_cond in v):
+                        return False
+                elif k == "$and":
+                    if not isinstance(v, list):
+                        return False
+                    # Return True only if ALL conditions in the $and list are True
+                    if not all(_evaluate_condition(sub_cond) for sub_cond in v):
+                        return False
+                else:
+                    doc_value = doc.metadata.get(k)
+                    
+                    # Handle nested operators like {"$exists": False}
+                    if isinstance(v, dict):
+                        for op, op_val in v.items():
+                            if op == "$exists":
+                                exists = doc_value is not None
+                                if exists != op_val:
+                                    return False
+                            elif op == "$eq":
+                                if doc_value != op_val:
+                                    return False
+                            elif op == "$ne":
+                                if doc_value == op_val:
+                                    return False
+                            elif op == "$in":
+                                if doc_value not in op_val:
+                                    return False
+                            else:
+                                # Unsupported operator, be safe and ignore or fail?
+                                # Let's just assume it doesn't match
+                                return False
+                    else:
+                        # Direct equality match
+                        if doc_value is None or doc_value != v:
+                            return False
+            return True
+            
+        return _evaluate_condition(filter_dict)
 
     # ------------------------------------------------------------------
     # Reciprocal Rank Fusion

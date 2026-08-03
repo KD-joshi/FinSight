@@ -347,6 +347,8 @@ def _make_rerank_documents():
             if idx is None or not (0 <= idx < len(documents)):
                 continue
                 
+            doc = documents[idx]
+                
             # Flashrank scores are typically probabilities [0, 1].
             # We use 0.10 as a cutoff to allow tangentially relevant chunks (like data tables) 
             # while blocking completely irrelevant documents (which score < 0.01).
