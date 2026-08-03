@@ -136,7 +136,7 @@ async def upload_document(file: UploadFile = File(...), thread_id: str = Form(..
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/sessions", response_model=list[SessionInfo])
-async def list_sessions():
+async def list_sessions(agent=Depends(get_rag_agent)):
     """List all available chat sessions from the local SQLite checkpointer."""
     try:
         conn = sqlite3.connect("checkpoints.sqlite", check_same_thread=False)
@@ -148,7 +148,30 @@ async def list_sessions():
         sessions = []
         for row in threads:
             thread_id = row[0]
-            sessions.append(SessionInfo(thread_id=thread_id, last_updated="Unknown", message_count=0))
+            session_name = "New Session"
+            message_count = 0
+            
+            # Extract first human message from the state
+            config = {"configurable": {"thread_id": thread_id}}
+            try:
+                state = agent.get_state(config)
+                if state and hasattr(state, 'values') and 'chat_history' in state.values:
+                    messages = state.values['chat_history']
+                    message_count = len(messages)
+                    for msg in messages:
+                        if msg.type == "human":
+                            content = msg.content
+                            session_name = content[:30] + "..." if len(content) > 30 else content
+                            break
+            except Exception:
+                pass
+                
+            sessions.append(SessionInfo(
+                thread_id=thread_id, 
+                last_updated="Unknown", 
+                message_count=message_count,
+                session_name=session_name
+            ))
             
         return sessions
     except Exception as e:

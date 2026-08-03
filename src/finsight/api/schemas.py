@@ -29,6 +29,7 @@ class SessionInfo(BaseModel):
     thread_id: str
     last_updated: str
     message_count: int
+    session_name: Optional[str] = None
 
 class MessageInfo(BaseModel):
     role: str
