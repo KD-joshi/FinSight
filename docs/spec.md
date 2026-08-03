@@ -36,7 +36,7 @@ The system employs a "Split-Brain" architecture and a resilient fallback mechani
 ### Fallback LLMs (Waterfall Strategy)
 If Groq hits a `429 Rate Limit` or `500 Server Error`, the system automatically falls back using LangChain's `.with_fallbacks()` mechanism:
 1.  **Google Gemini**: `gemini-3.6-flash` (via `langchain-google-genai v4.2.5`)
-2.  **Cohere**: `command-r-plus` (via `langchain-cohere v0.6.0`)
+2.  **Cohere**: `command-a-03-2025` (via `langchain-cohere v0.6.0`)
 
 ## 3. Embedding and Retrieval Specifications
 

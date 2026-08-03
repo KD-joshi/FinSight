@@ -73,7 +73,7 @@ def get_cohere_llm(**kwargs) -> BaseChatModel:
     model = kwargs.pop("model", None)
     temperature = kwargs.pop("temperature", None)
     return ChatCohere(
-        model=model or "command-r-plus",
+        model=model or "command-a-03-2025",
         cohere_api_key=settings.cohere_api_key,
         temperature=temperature if temperature is not None else settings.llm_temperature,
         **kwargs

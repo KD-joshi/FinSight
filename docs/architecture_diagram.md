@@ -29,7 +29,7 @@ graph TD
 
     LLM_Groq["Groq API<br/>openai/gpt-oss-120b"]:::llm
     LLM_Gemini["Google API<br/>gemini-3.6-flash"]:::llm
-    LLM_Cohere["Cohere API<br/>command-r-plus"]:::llm
+    LLM_Cohere["Cohere API<br/>command-a-03-2025"]:::llm
 
     Embed["HuggingFace Embeddings<br/>all-MiniLM-L6-v2"]:::embed
     Reranker["Flashrank<br/>Local Cross-Encoder"]:::tool
@@ -64,7 +64,7 @@ graph TD
 | **Orchestration** | LangGraph + LangChain | Stateful agent graph with checkpointing |
 | **Primary LLM** | Groq Cloud — `openai/gpt-oss-120b` | Final answer generation (4096 max tokens) |
 | **Fallback LLM** | Google — `gemini-3.6-flash` | Used in `.with_fallbacks()` chain |
-| **Fallback LLM 2** | Cohere — `command-r-plus` | Third-tier fallback |
+| **Fallback LLM 2** | Cohere — `command-a-03-2025` | Third-tier fallback |
 | **Embeddings** | HuggingFace — `all-MiniLM-L6-v2` | Local model, NOT Google API |
 | **Vector Database** | Pinecone Serverless | Namespace-per-session isolation |
 | **Sparse Retrieval** | BM25 (rank_bm25) | Currently disabled (empty doc list on init) |
@@ -282,7 +282,7 @@ In [graph.py line 448-452](file:///home/kuldeep-joshi/Desktop/finsight/src/finsi
 ### Resilient Fallback Chain
 The `get_llm_with_fallback()` function wraps the primary Groq model with LangChain's `.with_fallbacks()`:
 ```
-Groq (gpt-oss-120b) → Gemini (3.6-flash) → Cohere (command-r-plus)
+Groq (gpt-oss-120b) → Gemini (3.6-flash) → Cohere (command-a-03-2025)
 ```
 If Groq throws a 429/500 error, the request seamlessly falls through.
 
