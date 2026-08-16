@@ -66,6 +66,40 @@ from finsight.utils.query_cache import query_cache
 logger = logging.getLogger(__name__)
 
 
+def _get_llm_name(llm: BaseChatModel) -> str:
+    """Extract a human-readable model name from any LangChain LLM/chain object.
+
+    Works with:
+    - Raw LLM objects (ChatGroq, ChatGoogleGenerativeAI, etc.)
+    - Fallback chains created with .with_fallbacks()
+    - LCEL RunnableSequence chains (Prompt | LLM | Parser)
+    """
+    # Unwrap RunnableWithFallbacks
+    if hasattr(llm, "runnable"):
+        llm = llm.runnable
+
+    # Unwrap LCEL RunnableSequence (Prompt | LLM | OutputParser)
+    # The LLM is always one of the steps — find the first BaseChatModel step
+    if hasattr(llm, "steps"):
+        for step in llm.steps:
+            inner = step
+            if hasattr(inner, "runnable"):
+                inner = inner.runnable
+            if isinstance(inner, BaseChatModel):
+                llm = inner
+                break
+
+    # Extract model name from provider-specific attributes
+    name = (
+        getattr(llm, "model", None)
+        or getattr(llm, "model_name", None)
+        or getattr(llm, "model_id", None)
+        or type(llm).__name__
+    )
+    provider = type(llm).__name__.replace("Chat", "")
+    return f"{provider}/{name}"
+
+
 # ======================================================================
 # Agent State
 # ======================================================================
@@ -127,6 +161,7 @@ def _make_route_query(router_chain, conversational_chain=None):
     def route_query(state: AgentState) -> AgentState:
         """Classify query complexity and set the routing decision."""
         question = state["question"]
+        logger.info("🤖 [route_query] LLM: %s (small, 256 tokens)", _get_llm_name(router_chain))
         logger.info("Routing query: %.120s", question)
         
         from langchain_core.messages import AIMessage
@@ -195,6 +230,7 @@ def _make_plan_query(planner_chain):
     def plan_query(state: AgentState) -> AgentState:
         """Decompose a complex query into simpler sub-queries."""
         question = state["question"]
+        logger.info("🤖 [plan_query] LLM: %s (small, 256 tokens)", _get_llm_name(planner_chain))
         logger.info("Planning sub-queries for: %.120s", question)
 
         try:
@@ -393,6 +429,7 @@ def _make_rewrite_query(rewriter_chain):
         """Rewrite the query to improve retrieval."""
         current_query = state.get("current_query", state["question"])
         retry_count = state.get("retry_count", 0)
+        logger.info("🤖 [rewrite_query] LLM: %s (small, 256 tokens)", _get_llm_name(rewriter_chain))
 
         # Build a summary of the failed context
         failed_docs = state.get("documents", [])
@@ -439,6 +476,7 @@ def _make_generate(generator_chain):
         """Generate a cited answer from relevant documents."""
         question = state["question"]
         documents = state.get("documents", [])
+        logger.info("🤖 [generate] LLM: %s (primary, 4096 tokens)", _get_llm_name(generator_chain))
         all_documents = state.get("all_documents", documents)
 
         # Use all accumulated documents for complex queries
@@ -606,6 +644,7 @@ def surf_and_ingest_node(state: AgentState) -> AgentState:
     # We create a lightweight analyzer here to keep it simple, or we could pass it in.
     llm = ChatGroq(model=settings.groq_fallback_model, api_key=settings.groq_api_key)
     analyzer = build_query_analyzer_chain(llm)
+    logger.info("🤖 [surf_and_ingest] Analyzer LLM: %s (small)", _get_llm_name(llm))
     try:
         analysis = analyzer.invoke({"question": search_query})
         company_name = analysis.get("company_name")
@@ -660,6 +699,7 @@ def _make_check_hallucinations_and_answer(answer_grader):
             logger.warning("Generation failed heuristic check (lacks info).")
         else:
             try:
+                logger.info("🤖 [check_hallucinations] LLM: %s (grader, 256 tokens)", _get_llm_name(answer_grader))
                 # Ask LLM grader if it answered the question
                 res = answer_grader.invoke({
                     "question": question,
@@ -797,6 +837,7 @@ def build_rag_agent(
             if not history or len(history) <= 1:
                 return {"question": question}
             
+            logger.info("🤖 [condense_question] LLM: %s (small, 256 tokens)", _get_llm_name(condenser_chain))
             logger.info("Condensing query using chat history...")
             # We pass the history excluding the latest HumanMessage (which is the current question)
             past_history = history[:-1]
