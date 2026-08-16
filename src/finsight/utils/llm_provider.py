@@ -47,7 +47,8 @@ def get_llm(**kwargs) -> BaseChatModel:
         api_key=settings.groq_api_key,
         temperature=temperature if temperature is not None else settings.llm_temperature,
         max_tokens=max_tokens or settings.llm_max_tokens,
-        max_retries=settings.llm_max_retries,
+        # Set max_retries to 0 so we immediately failover to Gemini on 429s
+        max_retries=0,
         **kwargs
     )
 
@@ -63,6 +64,7 @@ def get_fallback_llm(**kwargs) -> BaseChatModel:
         google_api_key=settings.google_api_key,
         max_output_tokens=max_tokens or settings.llm_max_tokens,
         thinking_level="medium",
+        max_retries=0,
         **kwargs
     )
 
@@ -76,6 +78,7 @@ def get_cohere_llm(**kwargs) -> BaseChatModel:
         model=model or "command-a-03-2025",
         cohere_api_key=settings.cohere_api_key,
         temperature=temperature if temperature is not None else settings.llm_temperature,
+        max_retries=0,
         **kwargs
     )
 

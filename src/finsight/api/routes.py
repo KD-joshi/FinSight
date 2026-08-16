@@ -103,14 +103,16 @@ async def upload_document(file: UploadFile = File(...), thread_id: str = Form(..
     from llama_parse import LlamaParse
     from config.settings import settings
     
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are currently supported for upload.")
+    ext = os.path.splitext(file.filename)[1].lower()
+    allowed_exts = {".pdf", ".xlsx", ".csv"}
+    if ext not in allowed_exts:
+        raise HTTPException(status_code=400, detail="Only PDF, XLSX, and CSV files are currently supported for upload.")
         
     if not settings.llama_parse_api_key:
         raise HTTPException(status_code=500, detail="LlamaParse API key is not configured.")
         
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
             content = await file.read()
             tmp.write(content)
             tmp_path = tmp.name

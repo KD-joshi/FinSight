@@ -45,6 +45,35 @@ def surf_and_ingest(query: str, namespace: str = "finsight", extra_metadata: dic
             
             logger.info(f"Found web resource: {title} ({url})")
             
+            # SEC EDGAR index page fix: if URL is an index page, find the primary filing link
+            if url and "sec.gov/Archives/edgar/data/" in url and (url.endswith("-index.htm") or url.endswith("-index.html")):
+                try:
+                    import re
+                    logger.info(f"Detecting SEC EDGAR index page. Fetching actual filing link...")
+                    # Add User-Agent because sec.gov blocks requests without a specific format
+                    headers = {"User-Agent": "FinSight App (finsight@example.com)"}
+                    idx_resp = requests.get(url, headers=headers, timeout=10)
+                    idx_resp.raise_for_status()
+                    
+                    # Look for the primary document which usually matches the accession number or has a .htm extension
+                    # The format is <a href="/Archives/edgar/data/...">
+                    matches = re.findall(r'<a href="(/Archives/edgar/data/[^"]+\.htm(?:l)?)"', idx_resp.text)
+                    if matches:
+                        # Find the first one that is NOT an index page
+                        primary_links = [m for m in matches if not m.endswith("-index.htm") and not m.endswith("-index.html")]
+                        if primary_links:
+                            new_url = "https://www.sec.gov" + primary_links[0]
+                            logger.info(f"Resolved EDGAR index to primary document: {new_url}")
+                            url = new_url
+                            
+                            # Refetch the content for the actual document
+                            doc_resp = requests.get(url, headers=headers, timeout=10)
+                            doc_resp.raise_for_status()
+                            content = doc_resp.text
+                except Exception as e:
+                    logger.warning(f"Failed to resolve SEC index page {url}: {e}")
+
+            
             if url and url.endswith(".pdf"):
                 logger.info("Downloading PDF for LlamaParse...")
                 # Download PDF

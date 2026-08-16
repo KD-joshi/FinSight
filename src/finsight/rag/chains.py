@@ -169,7 +169,7 @@ def build_generator_chain(llm: BaseChatModel) -> RunnableSerializable[dict[str, 
 ROUTER_SYSTEM_PROMPT = """\
 You are a query complexity classifier for a financial document Q&A system.
 
-Classify the user's question into one of two categories:
+Classify the user's question into one of these categories:
 
 **simple** — The question can be answered with a single retrieval pass:
 - Single-company, single-metric queries ("What was Apple's revenue in 2024?")
@@ -189,8 +189,12 @@ Classify the user's question into one of two categories:
 - Off-topic advice ("How do I bake a cake?")
 - Note: DO NOT classify as out_of_domain if the user is asking about an uploaded document (e.g. "what is the highlight of this resume?").
 
+**explicit_web_search** — The user is explicitly requesting a web/internet search:
+- Phrases like "search the web for", "search online", "look this up on the internet", "google this", "find online", "browse the web", "search for the latest news on"
+- These should bypass local document retrieval entirely and go straight to web search.
+
 Respond with a JSON object containing exactly two fields:
-- "complexity": "simple", "complex", or "out_of_domain"
+- "complexity": "simple", "complex", "out_of_domain", or "explicit_web_search"
 - "reasoning": string (1 sentence explaining the classification)
 
 Do NOT include any text outside the JSON object."""

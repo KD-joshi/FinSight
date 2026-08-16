@@ -141,7 +141,7 @@ class AgentState(TypedDict, total=False):
     relevance_scores: list[dict[str, Any]]
     retry_count: int
     max_retries: int
-    route: Literal["simple", "complex", "cached", "out_of_domain"]
+    route: Literal["simple", "complex", "cached", "out_of_domain", "explicit_web_search"]
     error: str
     active_filters: dict[str, Any]
     human_consent: bool
@@ -189,6 +189,20 @@ def _make_route_query(router_chain, conversational_chain=None):
             logger.exception("Router chain failed — defaulting to 'simple'.")
             route = "simple"
 
+        if route == "explicit_web_search":
+            logger.info("User explicitly requested web search — bypassing retrieval and consent.")
+            return {
+                "route": "explicit_web_search",
+                "current_query": question,
+                "retry_count": 0,
+                "max_retries": state.get("max_retries", 3),
+                "all_documents": [],
+                "documents": [],
+                "generation": "",
+                "web_search_attempted": False,
+                "human_consent": True,  # User already consented in their message
+            }
+
         if route == "out_of_domain":
             if conversational_chain:
                 try:
@@ -217,6 +231,7 @@ def _make_route_query(router_chain, conversational_chain=None):
             "generation": "",
             "web_search_attempted": False,
         }
+
 
     return route_query
 
@@ -526,6 +541,7 @@ def _make_generate(generator_chain):
                 "question": question,
                 "context": context,
             })
+            logger.info("=== GENERATED RESPONSE ===\n%s\n=== END RESPONSE ===", generation)
             # Save successful generation to cache
             query_cache.set(question, generation)
         except Exception:
@@ -548,17 +564,16 @@ def _make_generate(generator_chain):
 # Edge / Conditional Functions
 # ======================================================================
 
-def _should_retrieve_or_plan(state: AgentState) -> Literal["retrieve", "plan_query", "END"]:
-    """Route based on query complexity classification or cache hit.
-
-    Returns:
-        ``"plan_query"`` for complex queries, ``"retrieve"`` for simple ones, or ``"END"`` if cached.
-    """
+def _should_retrieve_or_plan(state: AgentState) -> Literal["retrieve", "plan_query", "surf_and_ingest_node", "END"]:
+    """Route based on query complexity classification or cache hit."""
     if state.get("generation"):
         logger.info("Answer retrieved from cache. Ending pipeline.")
         return "END"
-        
+
     route = state.get("route", "simple")
+    if route == "explicit_web_search":
+        logger.info("Explicit web search requested → routing straight to surf_and_ingest.")
+        return "surf_and_ingest_node"
     if route == "complex":
         logger.info("Complex query → planning sub-queries.")
         return "plan_query"
@@ -616,8 +631,28 @@ def ask_human_consent(state: AgentState) -> AgentState:
     from langgraph.types import interrupt
     logger.info("Pausing graph execution to ask for human consent...")
     
+    # Show the user what query the system will actually search for,
+    # so they can confirm the system understood them correctly.
+    current_query = state.get("current_query") or state.get("question", "your question")
+    original_question = state.get("question", "")
+    
+    # If the query was condensed/rewritten to something different, make it explicit
+    if current_query.strip().lower() != original_question.strip().lower():
+        message = (
+            f"I couldn't find relevant documents in my knowledge base.\n\n"
+            f"I interpreted your question as:\n"
+            f"**\"{current_query}\"**\n\n"
+            f"Is this correct? If yes, I'll search the web to find this information."
+        )
+    else:
+        message = (
+            f"I couldn't find relevant documents for:\n"
+            f"**\"{current_query}\"**\n\n"
+            f"Should I search the web to find this information?"
+        )
+    
     # Interrupt execution and wait for the user to resume
-    consent = interrupt("For this question I would have to surf the web and collate info. Should I proceed?")
+    consent = interrupt(message)
     
     if consent is True or consent == "proceed":
         logger.info("Human granted consent for web search.")
@@ -625,6 +660,7 @@ def ask_human_consent(state: AgentState) -> AgentState:
     else:
         logger.info("Human denied consent.")
         return {"route": "cancel", "generation": "Search cancelled by user."}
+
 
 
 def surf_and_ingest_node(state: AgentState) -> AgentState:
@@ -662,13 +698,14 @@ def surf_and_ingest_node(state: AgentState) -> AgentState:
     ingested_docs = surf_and_ingest(search_query, namespace=session_id, extra_metadata=extra_metadata)
     logger.info("Successfully ingested %d chunks to Pinecone.", len(ingested_docs))
     
-    # We do NOT pass the ingested docs directly to generate!
-    # Instead, we clear the documents list and reset retry count, 
-    # and route back to the `retrieve` node to fetch the top 4 chunks cleanly.
+    # Pass the ingested docs directly into the state to avoid re-retrieving 
+    # all previous web searches from the namespace (which causes pollution).
+    # We will route straight to the reranker.
     return {
-        "documents": [],
+        "documents": ingested_docs,
+        "all_documents": ingested_docs,
         "retry_count": 0,
-        "current_query": search_query, # Use this for retrieval
+        "current_query": search_query, 
         "web_search_attempted": True,
     }
 
@@ -687,12 +724,18 @@ def _make_check_hallucinations_and_answer(answer_grader):
         question = state["question"]
         
         # Hardcoded heuristic check first for obvious failures
-        lacks_info = (
-            "don't have enough information" in generation.lower() or 
-            "don’t have enough information" in generation.lower() or 
-            "do not have enough information" in generation.lower() or
-            "not have enough information" in generation.lower()
-        )
+        # IMPORTANT: only fire if the answer is very short (< 200 chars), meaning
+        # the generation is essentially JUST the disclaimer with no substantive content.
+        # Long answers that happen to contain hedging phrases (e.g. "though I can't
+        # be certain about future projections") are valid — let the LLM grader judge those.
+        LACK_PHRASES = [
+            "don't have enough information",
+            "do not have enough information",
+            "not have enough information",
+        ]
+        gen_stripped = generation.strip()
+        has_lack_phrase = any(p in gen_stripped.lower() for p in LACK_PHRASES)
+        lacks_info = has_lack_phrase and len(gen_stripped) < 200
         
         if lacks_info:
             score = "no"
@@ -873,13 +916,14 @@ def build_rag_agent(
     workflow.set_entry_point("condense_question")
     workflow.add_edge("condense_question", "route_query")
 
-    # Add conditional edge: route_query → retrieve OR plan_query OR END
+    # Add conditional edge: route_query → retrieve OR plan_query OR surf_and_ingest_node OR END
     workflow.add_conditional_edges(
         "route_query",
         _should_retrieve_or_plan,
         {
             "retrieve": "retrieve",
             "plan_query": "plan_query",
+            "surf_and_ingest_node": "surf_and_ingest_node",
             "END": END,
         },
     )
@@ -914,9 +958,8 @@ def build_rag_agent(
         }
     )
 
-    # surf_and_ingest_node → retrieve
-    # (After ingesting to Pinecone, we loop back to retrieve the top 4 chunks)
-    workflow.add_edge("surf_and_ingest_node", "retrieve")
+    # surf_and_ingest_node → rerank_documents (skip retrieval to avoid namespace pollution)
+    workflow.add_edge("surf_and_ingest_node", "rerank_documents")
 
     # generate → END, ask_human_consent, or rewrite_query (Self-Reflection Loop)
     check_hallucinations = _make_check_hallucinations_and_answer(answer_grader_chain)
