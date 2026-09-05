@@ -1,8 +1,5 @@
 # FinSight Architecture & Workflows
 
-> [!IMPORTANT]
-> **Last Verified**: 2 Aug 2026 — Audited line-by-line against the live codebase.
-
 FinSight is an Agentic RAG (Retrieval-Augmented Generation) system for financial analysis. It uses LangGraph for orchestration, LangChain for model interactions, and a multi-tiered LLM fallback system.
 
 ---
@@ -55,7 +52,7 @@ graph TD
 
 ---
 
-## 2. Tech Stack (Verified)
+## 2. Tech Stack
 
 | Layer | Technology | Details |
 |-------|-----------|---------|
@@ -189,7 +186,7 @@ stateDiagram-v2
 
 ---
 
-## 5. Data Flow: Web Search Pipeline (Fixed)
+## 5. Data Flow: Web Search Pipeline
 
 When the local Pinecone database has no relevant documents:
 
@@ -249,8 +246,8 @@ sequenceDiagram
     UI-->>User: Displays answer
 ```
 
-> [!IMPORTANT]
-> **Key Fix (2 Aug 2026)**: The web search node now loops back to the `retrieve` node after ingesting to Pinecone, instead of dumping all raw chunks directly into the generator. This prevents the 413 Token Limit error that occurred with massive documents like P&G's 300-page Annual Report.
+> [!NOTE]
+> **Design Note**: The web search node loops back to the `retrieve` node after ingesting chunks to Pinecone, instead of passing all raw chunks directly to the generator. This effectively leverages Pinecone's vector search to filter down massive web documents (like 300-page Annual Reports) into the 4 most relevant chunks, preventing LLM token limit exhaustion.
 
 ---
 
@@ -293,19 +290,3 @@ If Groq throws a 429/500 error, the request seamlessly falls through.
 Each chat session gets a unique `thread_id` (UUID). This ID is used in two places:
 1. **Pinecone Namespace**: All documents (uploaded PDFs, web search results) are stored under `namespace=thread_id`. Retrieval only searches within that namespace.
 2. **SQLite Checkpointer**: LangGraph saves the full agent state (chat history, documents, generation) keyed by `thread_id`. This enables session persistence and HITL resume.
-
----
-
-## 8. Known Issues & Inconsistencies Found During Audit
-
-| Issue | File | Details |
-|-------|------|---------|
-| **Stale import** | [graph.py L48](file:///home/kuldeep-joshi/Desktop/finsight/src/finsight/agents/graph.py#L48) | `from langgraph.checkpoint.memory import MemorySaver` is imported but never used (we use `SqliteSaver` now) |
-| **Stale docstring** | [graph.py L1-37](file:///home/kuldeep-joshi/Desktop/finsight/src/finsight/agents/graph.py#L1-L37) | Module docstring still shows the old flow diagram without `condense_question`, `ask_human_consent`, or `surf_and_ingest_node` |
-
-| **Unused fallback_llm** | [dependencies.py L29](file:///home/kuldeep-joshi/Desktop/finsight/src/finsight/api/dependencies.py#L29) | `fallback_llm = get_fallback_llm()` is instantiated but passed as `None` to `build_rag_agent` |
-| **Stale retriever docstring** | [retriever.py L1-12](file:///home/kuldeep-joshi/Desktop/finsight/src/finsight/rag/retriever.py#L1-L12) | Module docstring references "Qdrant" but we use Pinecone |
-| **Stale PROJECT_CONTEXT.md** | [PROJECT_CONTEXT.md L13](file:///home/kuldeep-joshi/Desktop/finsight/PROJECT_CONTEXT.md#L13) | References "Qdrant Cloud" — should be "Pinecone Serverless" |
-| **Stale PROJECT_CONTEXT.md** | [PROJECT_CONTEXT.md L12](file:///home/kuldeep-joshi/Desktop/finsight/PROJECT_CONTEXT.md#L12) | Says embeddings are "Google Gemini text-embedding-004" — actual code uses HuggingFace |
-| **Stale PROJECT_CONTEXT.md** | [PROJECT_CONTEXT.md L26](file:///home/kuldeep-joshi/Desktop/finsight/PROJECT_CONTEXT.md#L26) | Says "Llama 3.1 70B" — actual model is `openai/gpt-oss-120b` |
-| **Embedding config mismatch** | [settings.py L86-88](file:///home/kuldeep-joshi/Desktop/finsight/config/settings.py#L86-L88) | Config says `models/text-embedding-004` (Google format) but embeddings.py uses HuggingFace |
