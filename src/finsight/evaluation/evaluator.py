@@ -24,9 +24,9 @@ from ragas.metrics import (
 
 # App
 from config.settings import settings
-from src.finsight.main import _init_llm, _init_retriever
-from src.finsight.agents.graph import build_rag_agent
-from src.finsight.utils.embeddings import get_embeddings
+from finsight.api.dependencies import get_rag_agent
+from finsight.utils.embeddings import get_embeddings
+from finsight.utils.llm_provider import get_llm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger("evaluator")
@@ -41,17 +41,13 @@ def run_evaluation() -> None:
     logger.info("Loading test dataset...")
     df = pd.read_csv(eval_dataset_path)
     
-    # Ragas needs specific column names: question, ground_truth, answer, contexts
-    # We already have question, ground_truth. We need to fill answer and contexts using our agent.
-    
     logger.info("Initializing Agent...")
     from dotenv import dotenv_values
     env_vars = dotenv_values(".env")
-    primary_llm, fallback_llm = _init_llm(env_vars)
-    retriever = _init_retriever(env_vars, settings.qdrant_collection_name)
-    from finsight.utils.embeddings import get_embeddings
+    
+    primary_llm = get_llm()
     embeddings = get_embeddings()
-    agent_graph = build_rag_agent(retriever, primary_llm, fallback_llm)
+    agent_graph = get_rag_agent()
 
     answers = []
     contexts_list = []
@@ -68,7 +64,12 @@ def run_evaluation() -> None:
                     "question": question,
                     "max_retries": 1
                 },
-                config={"configurable": {"thread_id": f"eval_thread_{idx}"}}
+                config={
+                    "configurable": {
+                        "thread_id": f"eval_thread_{idx}",
+                        "skip_human_consent": True
+                    }
+                }
             )
             
             # The agent state outputs "generation" and "documents"

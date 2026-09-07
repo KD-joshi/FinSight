@@ -13,36 +13,40 @@ from pathlib import Path
 
 import pandas as pd
 from dotenv import load_dotenv
-from qdrant_client import QdrantClient
+from pinecone import Pinecone
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 
 from config.settings import settings
-from src.finsight.main import _init_llm
+from finsight.utils.llm_provider import get_llm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger("eval_dataset_gen")
 
 
 def fetch_sample_documents(limit: int = 50) -> list[Document]:
-    logger.info(f"Connecting to Qdrant to fetch {limit} sample documents...")
-    client = QdrantClient(url=settings.qdrant_url, api_key=settings.qdrant_api_key)
+    logger.info(f"Connecting to Pinecone to fetch {limit} sample documents...")
+    pc = Pinecone(api_key=settings.pinecone_api_key)
+    index = pc.Index(settings.pinecone_index_name)
 
-    points, _ = client.scroll(
-        collection_name=settings.qdrant_collection_name,
-        limit=limit,
-        with_payload=True,
-        with_vectors=False,
+    # Fetch a random vector or just query with a dummy vector to get points
+    # Since we just need text chunks, we can query with zeros.
+    dummy_vector = [0.0] * 384 # MiniLM-L6-v2 dimension
+    
+    response = index.query(
+        vector=dummy_vector,
+        top_k=limit,
+        include_metadata=True,
+        namespace="finsight" # default testing namespace
     )
 
     documents = []
-    for point in points:
-        payload = point.payload or {}
-        page_content = payload.get("page_content", payload.get("text", ""))
+    for match in response.matches:
+        metadata = match.metadata or {}
+        page_content = metadata.get("text", "")
         if len(page_content) < 300:
             continue
-        metadata = payload.get("metadata", {})
         documents.append(Document(page_content=page_content, metadata=metadata))
 
     logger.info(f"Fetched {len(documents)} valid documents for generation.")
@@ -58,7 +62,7 @@ def generate_dataset(num_questions: int = 20) -> None:
     logger.info("Initializing Groq LLM for question generation...")
     from dotenv import dotenv_values
     env_vars = dotenv_values(".env")
-    llm, _ = _init_llm(env_vars)
+    llm = get_llm()
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", "You are an expert financial analyst. Read the following SEC filing extract and generate ONE realistic question that an investor might ask, which can be answered strictly using this text. Provide the ground-truth answer as well."),

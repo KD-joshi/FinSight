@@ -627,8 +627,16 @@ def _should_generate_or_rewrite(state: AgentState) -> Literal["generate", "rewri
 # Human-in-the-Loop & Web Search
 # ======================================================================
 
-def ask_human_consent(state: AgentState) -> AgentState:
+from langchain_core.runnables.config import RunnableConfig
+
+def ask_human_consent(state: AgentState, config: RunnableConfig) -> AgentState:
     from langgraph.types import interrupt
+    
+    # Testing/Evaluation bypass
+    if config.get("configurable", {}).get("skip_human_consent", False):
+        logger.info("TESTING MODE: Bypassing human consent and proceeding to web search.")
+        return {"route": "surf"}
+        
     logger.info("Pausing graph execution to ask for human consent...")
     
     # Show the user what query the system will actually search for,
@@ -698,12 +706,10 @@ def surf_and_ingest_node(state: AgentState) -> AgentState:
     ingested_docs = surf_and_ingest(search_query, namespace=session_id, extra_metadata=extra_metadata)
     logger.info("Successfully ingested %d chunks to Pinecone.", len(ingested_docs))
     
-    # Pass the ingested docs directly into the state to avoid re-retrieving 
-    # all previous web searches from the namespace (which causes pollution).
-    # We will route straight to the reranker.
+    # Route back to the retriever so Pinecone can narrow down the 
+    # potentially thousands of ingested chunks to the Top 40 BEFORE 
+    # sending them to the memory-intensive local Flashrank model.
     return {
-        "documents": ingested_docs,
-        "all_documents": ingested_docs,
         "retry_count": 0,
         "current_query": search_query, 
         "web_search_attempted": True,
@@ -958,8 +964,8 @@ def build_rag_agent(
         }
     )
 
-    # surf_and_ingest_node → rerank_documents (skip retrieval to avoid namespace pollution)
-    workflow.add_edge("surf_and_ingest_node", "rerank_documents")
+    # surf_and_ingest_node → retrieve
+    workflow.add_edge("surf_and_ingest_node", "retrieve")
 
     # generate → END, ask_human_consent, or rewrite_query (Self-Reflection Loop)
     check_hallucinations = _make_check_hallucinations_and_answer(answer_grader_chain)
