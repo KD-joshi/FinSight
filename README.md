@@ -11,6 +11,11 @@ FinSight is an advanced autonomous research assistant designed to answer complex
 - **Hybrid Retrieval System:** Combines Pinecone Serverless vector search with a local Flashrank cross-encoder for extremely precise context retrieval.
 - **Self-Grading & Hallucination Checks:** Every generated answer is graded against the retrieved context before being shown to the user.
 
+### Overview & Capabilities
+- **What it does**: FinSight is a specialized Agentic RAG (Retrieval-Augmented Generation) search engine that answers complex finance-related questions for any company by leveraging advanced AI search capabilities.
+- **Accurate Insights**: To ensure precision and prevent hallucinations, it exclusively answers queries using real, scraped financial data securely stored in a Pinecone vector database.
+- **Custom Document Analysis**: Users can easily upload their own personal or proprietary financial documents to securely query and extract insights from their private data.
+
 ## 🏗️ Architecture
 
 ```text
@@ -44,8 +49,17 @@ pip install -r requirements.txt
 
 # Set up environment variables
 cp .env.example .env
-# Fill in your API keys in .env
+# Fill in your API keys in the `.env` file
 ```
+
+## 🔑 Required API Keys
+
+1. **Groq**: https://console.groq.com
+2. **Google AI Studio**: https://aistudio.google.com
+3. **Cohere**: https://dashboard.cohere.com
+4. **Pinecone**: https://app.pinecone.io
+5. **Tavily**: https://tavily.com
+6. **LlamaParse**: https://cloud.llamaindex.ai
 
 ## 🚀 Quick Start
 
