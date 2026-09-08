@@ -72,7 +72,7 @@ class Settings(BaseSettings):
 
     # ── Model Configuration ──────────────────────────────────────────
     groq_model: str = Field(
-        default="openai/gpt-oss-120b",
+        default="groq/compound",
         description="Primary Groq chat model.",
     )
     groq_fallback_model: str = Field(
@@ -80,8 +80,12 @@ class Settings(BaseSettings):
         description="Smaller Groq model used when the primary is rate-limited.",
     )
     gemini_model: str = Field(
-        default="gemini-3.6-flash",
+        default="gemini-3.8-flash",
         description="Google Gemini model used as a secondary fallback LLM.",
+    )
+    cohere_model: str = Field(
+        default="command-a-03-2025",
+        description="Cohere model used as a tertiary fallback LLM.",
     )
     embedding_model: str = Field(
         default="all-MiniLM-L6-v2",
