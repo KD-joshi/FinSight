@@ -41,7 +41,7 @@ BANNER = r"""
 ║                          |___/                               ║
 ║                                                              ║
 ║  Agentic RAG for Financial Intelligence                      ║
-║  Powered by LangGraph • Groq • Qdrant                       ║
+║  Powered by LangGraph • Groq • Pinecone                     ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -103,8 +103,7 @@ def _load_settings() -> dict[str, str]:
     required_keys = {
         "GROQ_API_KEY": "https://console.groq.com",
         "GOOGLE_API_KEY": "https://aistudio.google.com",
-        "QDRANT_URL": "https://cloud.qdrant.io",
-        "QDRANT_API_KEY": "https://cloud.qdrant.io",
+        "PINECONE_API_KEY": "https://www.pinecone.io/",
     }
 
     settings: dict[str, str] = {}
