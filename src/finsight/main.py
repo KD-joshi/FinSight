@@ -127,10 +127,6 @@ def _load_settings() -> dict[str, str]:
         )
         sys.exit(1)
 
-    # Optional keys
-    settings["LANGFUSE_PUBLIC_KEY"] = os.getenv("LANGFUSE_PUBLIC_KEY", "")
-    settings["LANGFUSE_SECRET_KEY"] = os.getenv("LANGFUSE_SECRET_KEY", "")
-    settings["LANGFUSE_HOST"] = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
 
     return settings
 
@@ -300,10 +296,6 @@ def _run_query(agent, question: str, thread_id: str) -> str:
     """
     config = {"configurable": {"thread_id": thread_id}}
 
-    if os.getenv("LANGFUSE_PUBLIC_KEY"):
-        from langfuse.langchain import CallbackHandler
-        langfuse_handler = CallbackHandler()
-        config["callbacks"] = [langfuse_handler]
 
     initial_state = {
         "question": question,

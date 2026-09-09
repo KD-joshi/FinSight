@@ -65,10 +65,10 @@ class Settings(BaseSettings):
         description="Cohere API key for fallback LLM.",
     )
 
-    # ── Langfuse Observability ───────────────────────────────────────
-    langfuse_public_key: str = Field(default="")
-    langfuse_secret_key: str = Field(default="")
-    langfuse_host: str = Field(default="https://cloud.langfuse.com")
+    # ── LangSmith Observability ──────────────────────────────────────
+    langchain_tracing_v2: str = Field(default="false")
+    langchain_api_key: str = Field(default="")
+    langchain_project: str = Field(default="finsight")
 
     # ── Model Configuration ──────────────────────────────────────────
     groq_model: str = Field(
@@ -198,12 +198,7 @@ class Settings(BaseSettings):
             and self.cohere_api_key != "your_cohere_api_key_here"
         )
 
-    def has_langfuse_config(self) -> bool:
-        """Return *True* if Langfuse credentials are configured."""
-        return bool(
-            self.langfuse_public_key
-            and self.langfuse_public_key != "your_langfuse_public_key_here"
-        )
+
 
 
 # ── Module-level singleton ───────────────────────────────────────────

@@ -44,7 +44,7 @@ The system utilizes a 4-tier waterfall fallback strategy to ensure 100% uptime d
 ## 5. Backend & Evaluation
 - **API Framework**: FastAPI
   - **Purpose**: Serves the asynchronous backend endpoints for the chat interface.
-- **Evaluation Suite**: RAGAS
-  - **Purpose**: Runs synthetic datasets through the pipeline to automatically calculate Answer Relevancy, Faithfulness, and Context Precision using LLM-as-a-judge techniques.
-- **Observability**: Langfuse
-  - **Purpose**: Traces every LangGraph node execution, LLM token usage, and latency metric for debugging in production.
+- **Evaluation Suite**: LangSmith Evaluation
+  - **Purpose**: Generates synthetic datasets from local documents (`generate_dataset.py`) and runs them through the pipeline (`langsmith_eval.py`) to automatically evaluate answer accuracy and document retrieval scores using an LLM-as-a-judge.
+- **Observability**: LangSmith
+  - **Purpose**: Natively traces every LangGraph node execution, LLM token usage, and tracks dataset evaluation metrics in production.

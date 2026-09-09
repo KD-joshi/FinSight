@@ -23,10 +23,11 @@ FinSight is a production-grade Agentic Retrieval-Augmented Generation (RAG) syst
   - **Web Surfer**: Tavily web search → LlamaParse (PDFs) → chunk → ingest to Pinecone → loop back to retriever.
 - **API (FastAPI)**: REST endpoints for chat, session management, document upload, and HITL consent resume.
 - **Frontend (Next.js)**: Chat interface with session management, consent UI, document upload, and session history with human-readable titles.
-- **Observability**: Langfuse integration for tracing (configured but optional).
+- **Observability**: LangSmith integration for native tracing (configured via LANGCHAIN_TRACING_V2).
+- **Evaluation**: Synthetic dataset generator and evaluator (`langsmith_eval.py`) using LangSmith.
 
 ### 2.2 Tech Stack
-- **Primary LLM**: Groq API (`openai/gpt-oss-120b`, 4096 max tokens) with Gemini 3.6 + Cohere fallbacks.
+- **Primary LLM**: Groq API (`openai/gpt-oss-120b`, 4096 max tokens) with Gemini 3.8 Flash + Cohere fallbacks.
 - **Small LLM**: Same model capped at 256 max tokens for internal agents (Router, Planner, Rewriter, Condenser).
 - **Embeddings**: HuggingFace (`all-MiniLM-L6-v2`, 384 dimensions, local).
 - **Vector Database**: Pinecone Serverless.

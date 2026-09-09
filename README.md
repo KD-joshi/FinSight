@@ -33,7 +33,7 @@ User Query → Router → Planner → Hybrid Retriever (Pinecone + BM25) → Cro
 | **RAG Pipeline** | LangChain |
 | **Document Parsing** | LlamaParse |
 | **Web Search** | Tavily API |
-| **Observability** | Langfuse |
+| **Observability** | LangSmith |
 | **API Backend** | FastAPI |
 | **Frontend UI** | Next.js (React, TypeScript) |
 
@@ -70,8 +70,11 @@ python -m finsight.ingestion.sec_downloader --tickers AAPL TSLA GOOGL
 # Run the RAG API backend
 python -m finsight.main
 
-# Run evaluation suite
-python -m finsight.evaluation.evaluator
+# Generate Synthetic Evaluation Dataset
+PYTHONPATH=.:src python src/finsight/evaluation/generate_dataset.py
+
+# Run LangSmith evaluation suite
+PYTHONPATH=.:src python src/finsight/evaluation/langsmith_eval.py
 ```
 
 ## 📊 Evaluation Results

@@ -65,7 +65,7 @@ def generate_dataset(num_questions: int = 20) -> None:
     llm = get_llm()
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are an expert financial analyst. Read the following SEC filing extract and generate ONE realistic question that an investor might ask, which can be answered strictly using this text. Provide the ground-truth answer as well."),
+        ("system", "You are an expert financial analyst. Read the following SEC filing extract and generate ONE complex, realistic question that an investor might ask, which can be answered strictly using this text. \n\nIMPORTANT: Vary the type of question you ask! Do not just ask for basic facts. Randomly choose to ask for:\n- Numerical extractions (e.g. 'What was the exact revenue in Q3?')\n- Risk assessments (e.g. 'What are the primary supply chain risks mentioned?')\n- Strategic implications (e.g. 'How does the company plan to tackle AI integration?')\n- Comparative analysis (if multiple years are mentioned).\n\nProvide the ground-truth answer as well."),
         ("human", "Context:\n{context}\n\nRespond in JSON format with two keys: 'question' and 'ground_truth'.")
     ])
     
@@ -99,4 +99,4 @@ def generate_dataset(num_questions: int = 20) -> None:
 
 
 if __name__ == "__main__":
-    generate_dataset()
+    generate_dataset(num_questions=5)

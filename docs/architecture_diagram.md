@@ -70,7 +70,7 @@ graph TD
 | **Web Search** | Tavily API | `search_depth="advanced"`, max 3 results |
 | **Checkpointing** | SQLite (`checkpoints.sqlite`) | Session persistence + HITL interrupts |
 | **Caching** | `query_cache.json` | Exact-match query cache |
-| **Observability** | Langfuse | Tracing (configured but optional) |
+| **Observability** | LangSmith | Tracing (configured but optional) |
 
 > [!WARNING]
 > **BM25 is effectively disabled.** In [dependencies.py](file:///home/kuldeep-joshi/Desktop/finsight/src/finsight/api/dependencies.py#L32-L34), the `HybridRetriever` is initialized with `documents=[]`. This means BM25 sparse search returns 0 results every time. Only Pinecone vector search is active. This is intentional for Pinecone Serverless (we can't easily scroll all docs to build a local BM25 index), but the retriever class comments still reference "hybrid" behavior.

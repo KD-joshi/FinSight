@@ -63,7 +63,7 @@ def get_fallback_llm(**kwargs) -> BaseChatModel:
         model=model or settings.gemini_model,
         google_api_key=settings.google_api_key,
         max_output_tokens=max_tokens or settings.llm_max_tokens,
-        thinking_level="medium",
+        generation_config={"thinking_level": "low", "thinking_summaries": "auto"},
         max_retries=0,
         **kwargs
     )
