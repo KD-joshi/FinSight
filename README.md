@@ -1,18 +1,18 @@
 # FinSight — Agentic RAG for Financial Intelligence
 
-> Production-grade agentic RAG system for SEC filings and financial documents, powered by LangGraph, Pinecone, and multi-tier LLMs.
+> Agentic RAG system for diverse financial research, powered by LangGraph, Pinecone, and multi-tier LLMs.
 
-FinSight is an advanced autonomous research assistant designed to answer complex financial queries. Unlike basic RAG systems, it uses an agentic workflow to formulate multi-step plans, verify answers, and autonomously browse the web when internal documents are insufficient.
+FinSight is an autonomous research assistant designed to answer complex financial queries. It can research any finance-related question by drawing from a diverse database of corporate reports, SEC filings, live web articles, and custom user-uploaded documents. It uses an agentic workflow to formulate multi-step plans, verify answers, and autonomously browse the web when internal documents are insufficient.
 
 ## ✨ Features
 - **Agentic Orchestration:** Uses LangGraph to dynamically route queries, formulate research plans, and self-reflect to ensure accuracy.
-- **Autonomous Web Search:** If local knowledge is insufficient, the agent asks for consent, searches the web via Tavily, parses complex SEC PDFs via LlamaParse, and ingests them into the local database on the fly.
-- **Multi-Tier LLM Fallback:** Built-in resilience with a waterfall fallback system (Groq → Gemini → Cohere) to guarantee high availability even during API rate limits.
-- **Hybrid Retrieval System:** Combines Pinecone Serverless vector search with a local Flashrank cross-encoder for extremely precise context retrieval.
+- **Autonomous Web Search:** If local knowledge is insufficient, the agent asks for consent, searches the web via Tavily, parses PDFs via LlamaParse, and ingests them into the local database on the fly.
+- **Multi-Tier LLM Fallback:** Built-in fallback system (Groq → Gemini → Cohere) to maintain availability even during API rate limits.
+- **Hybrid Retrieval System:** Combines Pinecone Serverless vector search with a local Flashrank cross-encoder for context retrieval.
 - **Self-Grading & Hallucination Checks:** Every generated answer is graded against the retrieved context before being shown to the user.
 
 ### Overview & Capabilities
-- **What it does**: FinSight is a specialized Agentic RAG (Retrieval-Augmented Generation) search engine that answers complex finance-related questions for any company by leveraging advanced AI search capabilities.
+- **What it does**: FinSight is a specialized Agentic RAG (Retrieval-Augmented Generation) search engine that answers finance-related questions for any company or topic by leveraging AI search capabilities.
 - **Accurate Insights**: To ensure precision and prevent hallucinations, it exclusively answers queries using real, scraped financial data securely stored in a Pinecone vector database.
 - **Custom Document Analysis**: Users can easily upload their own personal or proprietary financial documents to securely query and extract insights from their private data.
 
@@ -87,7 +87,7 @@ Our multi-tier agentic architecture (Pinecone + LlamaParse + Flashrank) was eval
 | **Faithfulness** | **98.2%** | Measures the factual consistency of the generated answer against the retrieved documents (minimizes hallucinations). |
 | **Context Precision** | **95.5%** | Evaluates whether all of the ground-truth relevant items present in the contexts are ranked higher than irrelevant ones. |
 
-*(Note: Faithfulness and Context Precision reflect post-reranker synthesis scores, achieving near-perfect grounding due to our autonomous web-search fallback and LlamaParse chunking).*
+*(Note: Faithfulness and Context Precision reflect post-reranker synthesis scores, achieving high accuracy due to our autonomous web-search fallback and LlamaParse chunking).*
 
 ## 📝 License
 
