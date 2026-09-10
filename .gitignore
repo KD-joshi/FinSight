@@ -71,3 +71,13 @@ logs/
 *.sqlite
 *.sqlite-*
 query_cache.json
+
+# ──────────────────────────────────────────────────────────────
+# Project-Specific Exclusions
+# ──────────────────────────────────────────────────────────────
+.agents/
+docs/
+PROJECT_CONTEXT.md
+task.md
+test_*.py
+scripts/cleanup_job.py
