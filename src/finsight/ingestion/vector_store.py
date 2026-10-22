@@ -14,6 +14,7 @@ from langchain_pinecone import PineconeVectorStore
 
 from config.settings import settings
 from src.finsight.utils.embeddings import get_embeddings
+from finsight.utils.query_cache import query_cache
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,7 @@ def ingest_documents(
             batch = documents[start : start + batch_size]
             store.add_documents(batch)
             total_ingested += len(batch)
+            query_cache.bump_scope_revision(namespace)
 
             logger.debug(
                 "  Batch %d–%d ingested (%d/%d).",

@@ -10,6 +10,7 @@ from llama_parse import LlamaParse
 from config.settings import settings
 from finsight.ingestion.document_processor import chunk_document
 from finsight.ingestion.vector_store import get_vector_store
+from finsight.utils.query_cache import query_cache
 from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)
@@ -101,6 +102,7 @@ def surf_and_ingest(query: str, namespace: str = "finsight", extra_metadata: dic
                         
                         logger.info(f"Ingesting {len(chunks)} chunks from {title}...")
                         vector_store.add_documents(chunks)
+                        query_cache.bump_scope_revision(namespace)
                         ingested_docs.extend(chunks)
                         
                     os.remove(tmp_path)
@@ -114,6 +116,7 @@ def surf_and_ingest(query: str, namespace: str = "finsight", extra_metadata: dic
                 chunks = chunk_document(content, metadata=metadata)
                 if chunks:
                     vector_store.add_documents(chunks)
+                    query_cache.bump_scope_revision(namespace)
                     ingested_docs.extend(chunks)
                     
         return ingested_docs

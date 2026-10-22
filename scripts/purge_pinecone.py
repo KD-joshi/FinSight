@@ -10,7 +10,12 @@ Usage:
 import os
 import sys
 import argparse
+from pathlib import Path
 from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 def main():
     parser = argparse.ArgumentParser(description="Purge Pinecone Vector Database.")
@@ -42,9 +47,12 @@ def main():
         print(f"Error connecting to index '{index_name}': {e}")
         sys.exit(1)
 
+    from finsight.utils.query_cache import query_cache
+
     if args.namespace:
         print(f"Deleting all vectors in namespace '{args.namespace}'...")
         index.delete(delete_all=True, namespace=args.namespace)
+        query_cache.bump_scope_revision(args.namespace)
         print(f"Namespace '{args.namespace}' successfully purged.")
     else:
         print(f"WARNING: You are about to delete ALL data across ALL namespaces in index '{index_name}'.")
@@ -60,6 +68,7 @@ def main():
                 for ns in namespaces:
                     print(f"Deleting namespace: {ns}")
                     index.delete(delete_all=True, namespace=ns)
+                    query_cache.bump_scope_revision(ns)
                 print("All namespaces successfully purged.")
         else:
             print("Operation aborted.")

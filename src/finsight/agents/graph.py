@@ -43,6 +43,8 @@ Key design decisions:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from typing import Any, Literal
 
@@ -52,6 +54,8 @@ from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
 from finsight.rag.chains import (
+    GENERATOR_SYSTEM_PROMPT,
+    GENERATOR_USER_PROMPT,
     build_generator_chain,
     build_planner_chain,
     build_rewriter_chain,
@@ -62,6 +66,7 @@ from finsight.rag.chains import (
 )
 from finsight.rag.retriever import HybridRetriever
 from finsight.utils.query_cache import query_cache
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +130,7 @@ class AgentState(TypedDict, total=False):
         relevance_scores: Grading results per document from the grader.
         retry_count: Number of retrieval retries so far.
         max_retries: Maximum allowed retries (default 3).
-        route: Query classification — ``"simple"`` or ``"complex"``.
+        route: Query classification or ``"cached"`` for a session cache hit.
         error: Error message if something went wrong.
         active_filters: Metadata filters applied during retrieval.
     """
@@ -133,6 +138,7 @@ class AgentState(TypedDict, total=False):
     chat_history: Annotated[list[Any], add_messages]
     session_id: str
     question: str
+    original_question: str
     sub_queries: list[str]
     current_query: str
     documents: list[Document]
@@ -142,6 +148,7 @@ class AgentState(TypedDict, total=False):
     retry_count: int
     max_retries: int
     route: Literal["simple", "complex", "cached", "out_of_domain", "explicit_web_search"]
+    cache_revision: int
     error: str
     active_filters: dict[str, Any]
     human_consent: bool
@@ -152,7 +159,13 @@ class AgentState(TypedDict, total=False):
 # Node Functions
 # ======================================================================
 
-def _make_route_query(router_chain, conversational_chain=None):
+def _make_route_query(
+    router_chain,
+    conversational_chain=None,
+    *,
+    prompt_fingerprint: str = "",
+    model_fingerprint: str = "",
+):
     """Create the route_query node function.
 
     Classifies the query as simple or complex using the router chain.
@@ -161,23 +174,62 @@ def _make_route_query(router_chain, conversational_chain=None):
     def route_query(state: AgentState) -> AgentState:
         """Classify query complexity and set the routing decision."""
         question = state["question"]
-        logger.info("🤖 [route_query] LLM: %s (small, 256 tokens)", _get_llm_name(router_chain))
         logger.info("Routing query: %.120s", question)
         
         from langchain_core.messages import AIMessage
-        # Check cache first
-        cached_answer = query_cache.get(question)
-        if cached_answer:
-            logger.info("Found cached answer for query. Skipping pipeline.")
-            return {
-                "route": "cached",
-                "current_query": question,
-                "generation": cached_answer,
-                "chat_history": [AIMessage(content=cached_answer)],
-                "retry_count": 0,
-            }
+        query_lower = state.get("original_question", question).casefold()
+        force_fresh_search = any(
+            cue in query_lower
+            for cue in (
+                "search the web",
+                "web search",
+                "browse the web",
+                "search online",
+                "look online",
+                "look up online",
+                "browse",
+                "internet",
+                "online",
+                "latest",
+                "current",
+                "today",
+                "right now",
+            )
+        )
+        cache_revision, cached = query_cache.lookup(
+            question,
+            scope_id=state.get("session_id"),
+            prompt_fingerprint=prompt_fingerprint,
+            model_fingerprint=model_fingerprint,
+            bypass=force_fresh_search,
+        )
+        if cached:
+            try:
+                cached_documents = [
+                    Document(
+                        page_content=item["page_content"],
+                        metadata=item.get("metadata", {}),
+                    )
+                    for item in cached["documents"]
+                    if isinstance(item, dict) and isinstance(item.get("page_content"), str)
+                ]
+                if cached_documents:
+                    logger.info("Using cached final answer for session %s.", state.get("session_id"))
+                    return {
+                        "route": "cached",
+                        "current_query": question,
+                        "generation": cached["answer"],
+                        "documents": cached_documents,
+                        "all_documents": cached_documents,
+                        "chat_history": [AIMessage(content=cached["answer"])],
+                        "retry_count": 0,
+                        "cache_revision": cache_revision,
+                    }
+            except (KeyError, TypeError, ValueError):
+                logger.warning("Ignoring malformed cached answer for session %s.", state.get("session_id"))
 
         try:
+            logger.info("🤖 [route_query] LLM: %s (small, 256 tokens)", _get_llm_name(router_chain))
             result = router_chain.invoke({"question": question})
             route = result.get("complexity", "simple")
             logger.info(
@@ -201,6 +253,7 @@ def _make_route_query(router_chain, conversational_chain=None):
                 "generation": "",
                 "web_search_attempted": False,
                 "human_consent": True,  # User already consented in their message
+                "cache_revision": cache_revision,
             }
 
         if route == "out_of_domain":
@@ -219,6 +272,7 @@ def _make_route_query(router_chain, conversational_chain=None):
                 "chat_history": [AIMessage(content=err_msg)],
                 "retry_count": 0,
                 "max_retries": state.get("max_retries", 3),
+                "cache_revision": cache_revision,
             }
 
         return {
@@ -230,6 +284,7 @@ def _make_route_query(router_chain, conversational_chain=None):
             "documents": [],
             "generation": "",
             "web_search_attempted": False,
+            "cache_revision": cache_revision,
         }
 
 
@@ -542,8 +597,6 @@ def _make_generate(generator_chain):
                 "context": context,
             })
             logger.info("=== GENERATED RESPONSE ===\n%s\n=== END RESPONSE ===", generation)
-            # Save successful generation to cache
-            query_cache.set(question, generation)
         except Exception:
             logger.exception("Generator chain failed.")
             generation = (
@@ -565,12 +618,15 @@ def _make_generate(generator_chain):
 # ======================================================================
 
 def _should_retrieve_or_plan(state: AgentState) -> Literal["retrieve", "plan_query", "surf_and_ingest_node", "END"]:
-    """Route based on query complexity classification or cache hit."""
-    if state.get("generation"):
-        logger.info("Answer retrieved from cache. Ending pipeline.")
+    """Route based on the query classification."""
+    route = state.get("route", "simple")
+    if route == "cached" and state.get("generation"):
+        logger.info("Session cache supplied the final answer. Ending pipeline.")
+        return "END"
+    if route == "out_of_domain" and state.get("generation"):
+        logger.info("Out-of-domain response generated. Ending pipeline.")
         return "END"
 
-    route = state.get("route", "simple")
     if route == "explicit_web_search":
         logger.info("Explicit web search requested → routing straight to surf_and_ingest.")
         return "surf_and_ingest_node"
@@ -713,6 +769,7 @@ def surf_and_ingest_node(state: AgentState) -> AgentState:
         "retry_count": 0,
         "current_query": search_query, 
         "web_search_attempted": True,
+        "cache_revision": query_cache.get_scope_revision(session_id),
     }
 
 
@@ -723,7 +780,12 @@ def _should_surf_or_end(state: AgentState) -> Literal["surf_and_ingest_node", "E
     logger.info("Human consent denied → terminating pipeline.")
     return "END"
 
-def _make_check_hallucinations_and_answer(answer_grader):
+def _make_check_hallucinations_and_answer(
+    answer_grader,
+    *,
+    prompt_fingerprint: str = "",
+    model_fingerprint: str = "",
+):
     def _check_hallucinations_and_answer(state: AgentState) -> Literal["rewrite_query", "ask_human_consent", "END"]:
         """Self-reflection: Grades if the generation answers the question."""
         generation = state.get("generation", "")
@@ -761,6 +823,20 @@ def _make_check_hallucinations_and_answer(answer_grader):
                 score = "yes"
                 
         if score == "yes":
+            documents = state.get("all_documents") or state.get("documents", [])
+            if documents:
+                query_cache.set(
+                    question,
+                    generation,
+                    [
+                        {"page_content": doc.page_content, "metadata": doc.metadata}
+                        for doc in documents
+                    ],
+                    scope_id=state.get("session_id"),
+                    expected_revision=state.get("cache_revision"),
+                    prompt_fingerprint=prompt_fingerprint,
+                    model_fingerprint=model_fingerprint,
+                )
             return "END"
             
         retry_count = state.get("retry_count", 0)
@@ -863,6 +939,21 @@ def build_rag_agent(
     planner_chain = build_planner_chain(planning_llm)
     rewriter_chain = build_rewriter_chain(planning_llm)
     generator_chain = build_generator_chain(llm)
+    prompt_fingerprint = hashlib.sha256(
+        (GENERATOR_SYSTEM_PROMPT + "\0" + GENERATOR_USER_PROMPT).encode("utf-8")
+    ).hexdigest()
+    model_config = {
+        "generator": _get_llm_name(generator_chain),
+        "groq_primary": settings.groq_model,
+        "groq_fallback": settings.groq_fallback_model,
+        "gemini": settings.gemini_model,
+        "cohere": settings.cohere_model,
+        "temperature": settings.llm_temperature,
+        "max_tokens": settings.llm_max_tokens,
+    }
+    model_fingerprint = hashlib.sha256(
+        json.dumps(model_config, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     analyzer_chain = build_query_analyzer_chain(routing_llm)
     condenser_chain = build_condense_question_chain(routing_llm)
     conversational_chain = build_conversational_chain(routing_llm)
@@ -870,7 +961,12 @@ def build_rag_agent(
     answer_grader_chain = build_answer_grader_chain(routing_llm)
 
     # Create node functions (closures over chains + retriever)
-    route_query = _make_route_query(router_chain, conversational_chain)
+    route_query = _make_route_query(
+        router_chain,
+        conversational_chain,
+        prompt_fingerprint=prompt_fingerprint,
+        model_fingerprint=model_fingerprint,
+    )
     plan_query = _make_plan_query(planner_chain)
     retrieve = _make_retrieve(retriever, analyzer_chain)
     rerank_documents = _make_rerank_documents()
@@ -884,7 +980,7 @@ def build_rag_agent(
             
             # If history only has the current message or is empty, skip condensation
             if not history or len(history) <= 1:
-                return {"question": question}
+                return {"question": question, "original_question": question}
             
             logger.info("🤖 [condense_question] LLM: %s (small, 256 tokens)", _get_llm_name(condenser_chain))
             logger.info("Condensing query using chat history...")
@@ -897,7 +993,7 @@ def build_rag_agent(
                 "question": question
             })
             logger.info("Condensed query: %s", condensed)
-            return {"question": condensed}
+            return {"question": condensed, "original_question": question}
         return condense_question
 
     condense_question_node = _make_condense_question(condenser_chain)
@@ -968,7 +1064,11 @@ def build_rag_agent(
     workflow.add_edge("surf_and_ingest_node", "retrieve")
 
     # generate → END, ask_human_consent, or rewrite_query (Self-Reflection Loop)
-    check_hallucinations = _make_check_hallucinations_and_answer(answer_grader_chain)
+    check_hallucinations = _make_check_hallucinations_and_answer(
+        answer_grader_chain,
+        prompt_fingerprint=prompt_fingerprint,
+        model_fingerprint=model_fingerprint,
+    )
     workflow.add_conditional_edges(
         "generate",
         check_hallucinations,

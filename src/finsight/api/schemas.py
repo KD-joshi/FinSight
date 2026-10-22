@@ -16,7 +16,7 @@ class ChatResponse(BaseModel):
     """Response payload for the chat endpoint."""
     answer: str = Field(..., description="The generated answer from the LangGraph agent")
     sources: List[SourceDocument] = Field(default_factory=list, description="List of source documents used to generate the answer")
-    route: Optional[str] = Field(None, description="The reasoning route taken (e.g. 'simple', 'complex', 'cached')")
+    route: Optional[str] = Field(None, description="The reasoning route taken (e.g. 'simple', 'complex', 'cached', 'out_of_domain')")
     execution_time_ms: Optional[float] = Field(None, description="Execution time in milliseconds")
     requires_consent: bool = Field(default=False, description="True if the agent paused to ask for human consent")
 
